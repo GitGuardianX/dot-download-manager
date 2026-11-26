@@ -1,0 +1,26 @@
+:root { color-scheme: dark; font: 13px "Segoe UI", system-ui, sans-serif; color: #e7edf8; background: #101827; }
+body { width: 330px; margin: 0; padding: 18px 20px 20px; }
+header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+h1 { margin: 0; font-size: 21px; letter-spacing: 2px; }
+h2 { margin: 18px 0 8px; font-size: 10px; letter-spacing: 1px; color: #8f9db5; text-transform: uppercase; }
+p { margin: 0; line-height: 1.45; }
+.state { color: #8f9db5; font-size: 12px; margin-top: 2px; }
+.state.ok { color: #65d7b0; }
+.state.off { color: #ff899c; }
+.notice { background: #1b2336; border: 1px solid #273249; border-radius: 6px; padding: 9px 11px; margin-bottom: 10px; color: #c8d2e4; font-size: 12px; }
+.muted { color: #8f9db5; font-size: 12px; }
+.problem { color: #ff899c; font-size: 12px; }
+.toggle { display: flex; align-items: center; gap: 8px; margin: 7px 0; font-size: 12.5px; cursor: pointer; }
+.toggle input { width: auto; margin: 0; accent-color: #a393ff; }
+.row { display: flex; gap: 6px; align-items: center; }
+.media { justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1d2638; }
+.media span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+input { box-sizing: border-box; width: 100%; padding: 8px 9px; color: #e7edf8; background: #0c111d; border: 1px solid #273249; border-radius: 6px; font: inherit; }
+input:focus { outline: 1px solid #a393ff; }
+button { flex: none; padding: 8px 12px; border: 0; border-radius: 6px; background: #a393ff; color: #0c111d; font: 650 12px "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+button:disabled { opacity: .55; cursor: progress; }
+button.wide { width: 100%; margin-top: 8px; padding: 9px 12px; }
+#status { min-height: 18px; margin-top: 10px; overflow-wrap: anywhere; }
+details { margin-top: 14px; }
+summary { color: #8f9db5; cursor: pointer; font-size: 12px; }
+label[for] { display: block; font-size: 11px; color: #8f9db5; margin: 10px 0 6px; }

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>DOT</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header>
+    <img src="icon.png" width="32" height="32" alt="">
+    <div><h1>DOT</h1><p id="state" class="state">Checking…</p></div>
+  </header>
+  <p id="offline" class="notice" hidden>DOT isn't running, so downloads stay in your browser. Open DOT, and check that
+    <b>Accept downloads from the DOT browser extension</b> is on in its Settings.</p>
+  <label class="toggle"><input id="capture" type="checkbox"> Send downloads to DOT</label>
+  <label class="toggle"><input id="buttons" type="checkbox"> Show the button over videos</label>
+  <h2>Media on this page</h2>
+  <div id="media"><p class="muted">Play a video and it will appear here.</p></div>
+  <button id="page" type="button" class="wide">Download the video on this page</button>
+  <h2>Download a link</h2>
+  <div class="row"><input id="url" type="url" placeholder="https://example.com/file.zip" spellcheck="false"><button id="send" type="button">Send</button></div>
+  <p id="status" class="muted" role="status"></p>
+  <details>
+    <summary>Connection</summary>
+    <label for="port">DOT port (must match DOT Settings)</label>
+    <div class="row"><input id="port" type="number" min="1024" max="65535"><button id="save" type="button">Save</button></div>
+  </details>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+DOT 0.2: BROWSER DOWNLOAD WORKFLOW
+
+Reported issues: an HTTP 403 for a sample MP4; missing browser media buttons,
+automatic capture, and a download confirmation window.
+
+Diagnosis: all three direct request variants (DOT UA, browser UA with Range, and
+browser UA without Range) received HTTP 403 with Server: cloudflare and
+cf-mitigated: challenge. The earlier URL-only extension did not carry a browser
+session and did not implement interception.
+
+Implemented:
+  - Browser content script buttons over native video/audio elements in frames.
+  - Observed media/manifest response URLs for players using blob sources.
+  - Capture of direct file links and browser downloads, including extensionless
+    attachment responses. An unavailable DOT falls back to the browser download.
+  - Confirmation with category, filename, destination, optional description,
+    remembered category folders, Start download, Download later, and Cancel.
+  - Selected-request browser headers/cookies kept only in memory. Redirects to
+    other origins drop Cookie, Authorization, Origin and custom X-* headers.
+  - Browser-assisted response streaming for native HTTP 401/403, with sequential
+    offsets, declared-size validation, final assembly, and SHA-256 in DOT.
+  - A small C# WinExe native messaging host that launches the app and supplies
+    pairing information only to registered extension origins. HKCU registration
+    supports Chromium browsers. The extension now has a fixed public-key ID.
+  - Ordinary HLS/DASH media saved through the locally installed FFmpeg. Credentials
+    for cookies are scoped to the source host. Arbitrary Authorization headers
+    are not forwarded to segment servers.
+  - Friendly refusal messages, ordinary GET fallback for rejected Range probes,
+    and rejection of HTML responses masquerading as media files.
+
+Validation includes real browser events against local fixtures, real native-host
+launch of the packaged app, a generated HLS/DASH fixture checked with FFprobe,
+and the existing download-engine tests. See VALIDATION.json for current results.
+
+Limits: access still depends on the site and the browser session. Verification,
+expired URLs, non-exposed sources and protected players cannot be assumed to work.
+The exact reported Cloudflare URL was not verified as a successful download using
+the user's live browser session. No private browser profile or cookie database
+was extracted to attempt this; session data flows through the extension on use.
+
+Implementation references:
+https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging
+https://developer.chrome.com/docs/extensions/reference/api/downloads
+https://developer.chrome.com/docs/extensions/reference/api/webRequest
+https://ffmpeg.org/ffmpeg-protocols.html

@@ -1,0 +1,157 @@
+DOT 0.2 BROWSER INTEGRATION — STABILITY INCIDENT
+26 November 2026
+
+User report: after installing/reloading DOT's extension, closing and reopening
+Brave caused severe system-wide input lag. The PC required a physical power-off.
+The user subsequently confirmed that the freeze began immediately on reopening,
+before clicking a download or media button. Startup/page restoration is therefore
+the relevant timing; the native-connection simulation does not establish that a
+native launch was actually triggered during this incident.
+
+STATUS
+
+The 0.2 browser integration is withdrawn. The installed and source extension
+entry points have been replaced with inert files. Browser permissions, content
+scripts and background workers are absent from the containment manifest. DOT's
+per-user Chrome/Brave/Edge native messaging registration was removed. Browser
+integration is disabled in queue settings. Existing downloads and queue entries
+were preserved. The 0.2.1 desktop application cannot re-enable integration, and
+the replacement native host only returns a disabled response; it cannot launch
+another process. No browser was opened during this investigation.
+
+EVIDENCE AND LIMITS
+
+Windows System events 41 and 6008 confirm an unclean shutdown. The queried six-hour
+window contained no Resource-Exhaustion-Detector event 2004, display-driver event
+4101, or matching Application Error/Hang event identifying Brave or DOT. This
+does not rule out a resource spike, a driver stall, or other causes. A forced
+shutdown can prevent the useful diagnostic record from being written.
+
+The installed DOT extension was confirmed to be loaded from this project's
+dist/browser-extension folder. No browser profile preferences or cookie databases
+were modified. Only DOT's installed files and its own native host registrations
+were changed.
+
+Identified code hazards in the withdrawn version:
+
+  1. Every child-list mutation triggered a complete media query of the document.
+     Scroll callbacks also synchronously visited every tracked player and read
+     layout. This work had no debounce, rate budget, player limit, or circuit
+     breaker for busy pages and restored tabs.
+
+  2. Failed or absent pairing could cause concurrent download events to each
+     call sendNativeMessage independently. There was no shared connection
+     attempt. Each old native host could independently launch DOT if its health
+     probe failed, without a shared startup lock or process-launch cooldown.
+
+An isolated Node VM simulation, with a 64 MiB heap ceiling and stubbed APIs,
+produced 16 native-connection calls for 16 concurrent download events. No native
+process was launched. A fake document with 100 media elements produced 1,000
+whole-document media queries for 1,000 mutation callbacks, 100,000 media visits,
+and 10,000 layout reads for 100 scroll callbacks. No real page was loaded.
+
+These are reproduced hazards, NOT a confirmed diagnosis of the reported complete
+PC freeze. The original integration tests established limited functional behavior
+on small fixtures; they did not establish safe startup or browsing performance.
+
+VALIDATION OF CONTAINMENT
+
+The source test suite passed 33 checks, including five containment regressions:
+no execution/permissions in the extension manifest, inert cached script entry
+points, registration refused, browser-start returning before creating a UI/state,
+and browser integration disabled by default. The download tests use local HTTP
+fixtures; stream tests use generated local media. No real browser was started.
+Packaged-executable checks separately verify a local 2 MiB download, refusal of
+browser-start and install-browser commands, and a native-host disabled response.
+
+The containment tests are not a new browser stability guarantee. Browser
+integration remains disabled, and the user should not retry the withdrawn 0.2
+extension while this incident is unresolved.
+
+EVIDENCE LOCATION
+
+artifacts/browser-incident-20261126T092219Z contains the original extension files,
+native host source/binary, original desktop binary, containment record, and the
+bounded offline simulation results. Evidence was retained locally.
+
+PRIMARY DOCUMENTATION REVIEWED
+
+https://developer.chrome.com/docs/extensions/reference/api/webRequest
+https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging
+
+
+===============================================================================
+FOLLOW-UP INVESTIGATION - 26 November 2026, evening (DOT 0.3 work)
+===============================================================================
+
+TIMELINE (local time, UTC+5:30; from file times and Windows logs)
+
+  14:33:47  0.2 native host registered (dist\com.dot.downloadmanager.json).
+  14:38:21  0.2 validation finished.
+  14:41:50  One DOT.exe (0.2) started. Its PyInstaller folder %TEMP%\_MEI0000688c2
+            is the only one left over; a hard power-off leaves one per process
+            that was alive, so exactly one DOT instance existed at the freeze.
+  ~14:44:00 Brave reopened (Brave logs extension garbage collection ~30 s after
+            start: 14:44:29).
+  14:45:47  Windows Error Reporting filed an AppHang report for explorer.exe:
+            the shell itself had stopped responding.
+  14:45:57  DOT's scheduler still wrote state.json.tmp (DOT 0.2 saved every second).
+  ~14:46:00 Power button. Kernel-Power 41 logged at boot, 14:46:23.
+
+  At the freeze DOT's bridge was on (browser_enabled true) and its queue held one
+  failed MP4 and no "Waiting for browser" job, so the extension's 30 s alarm had
+  nothing to stream.
+
+CORRECTIONS / CLARIFICATIONS
+
+  - The LiveKernelEvent 141 (VIDEO_ENGINE_TIMEOUT_DETECTED) logged at 14:45:43 is
+    NOT from this incident: its report folder and dump date from 17 Nov 22:24.
+    WER was re-trying an old queued report. (It does show the GPU driver has hung
+    once before on this PC.)
+  - No DOT.exe process storm occurred (one leftover _MEI folder).
+  - The installed IDM hooks every brave.exe process (it captured test downloads
+    from a temporary, extension-free headless Brave). Two download managers were
+    active in the same browser. Whether that contributed is unknown.
+
+HYPOTHESIS TESTED AND RULED OUT: start-up replay of download history
+
+  Some Chrome versions fire downloads.onCreated for every history item after a
+  restart (reported for Chrome 142; KDE's integration code warns it can freeze the
+  UI). The 0.2 worker had no state/age filter, and any failed hand-off spawned a
+  native host (cmd.exe + host + possibly DOT.exe per item), so a replay would have
+  been a process storm. tools/repro_startup_replay.py ran the ORIGINAL 0.2 worker in
+  a resource-capped headless Brave 158 with 24 completed downloads in history and
+  the onCreated listener persisted, with native messaging stubbed: 0 replayed events,
+  0 native attempts. Brave 158 does not replay history, so this is not the cause.
+
+MEASURED: start-up cost of the 0.2 extension
+
+  tools/validate_extension_brave.py restored 6 heavy tabs (3 iframes each, 20+
+  video elements per page, DOM churn every 150-200 ms, background XHR) in a capped
+  headless Brave, comparing no extension, 0.2 (native messaging stripped), and 0.3.
+  The 0.2 content script was confirmed active (20 overlays per restored page). Over
+  30 s and three runs, CPU-seconds were: none 3.55/3.92/3.64, 0.2 4.25/4.98/3.83
+  (average +18%), 0.3 3.83/2.53/3.81 (within run-to-run noise of no extension).
+  Peak memory stayed in the same 0.34-0.41 GB range for all three. In this scenario
+  the 0.2 extension was not close to a freeze.
+
+CONCLUSION
+
+  The root cause of the freeze remains unproven. Ruled out: a DOT.exe process storm,
+  browser-job streaming, and history replay on Brave 158. Not reproducible here: a
+  very large real session restore, interaction with IDM's hooks in the same browser,
+  or an unrelated driver event (no new kernel dump was written; a forced power-off
+  can prevent one). The 0.2 design flaws remain real regardless: one native host per
+  failed request, a host that launches DOT on its own, a second DOT that lingers
+  behind a modal error, per-frame timers and whole-document scans, and full-traffic
+  interception with extraHeaders.
+
+  DOT 0.3 removes all of them by construction (README.txt, "How the integration
+  stays light") and is validated in a capped real browser:
+  artifacts/extension-validation/result.json and artifacts/startup-replay/result.json.
+
+FOLLOW-UP SOURCES
+
+https://groups.google.com/a/chromium.org/g/chromium-extensions/c/AensQ0BiU8U
+https://sources.debian.org/src/plasma-browser-integration/6.3.4-2/extension/extension-downloads.js
+https://developer.chrome.com/docs/extensions/reference/api/downloads

@@ -1,0 +1,67 @@
+DOT 0.3: SAFE BROWSER INTEGRATION
+
+Goal: IDM-style browser integration (download capture, a video button, a context menu)
+that cannot overload the PC, after the 0.2 integration was withdrawn (see
+INCIDENT-20261126.txt, including the evening follow-up).
+
+Browser extension (rewritten, same ID hpdhbnmbbjmgnccfbgffanhcfdkhalpn)
+  - No native messaging, no alarms, no timers or scans at start-up.
+  - Downloads are taken via downloads.onDeterminingFilename (never fires for history),
+    filtered by state, age, type and incognito; one hand-off at a time, 8 per minute,
+    2 waiting; a download is never held longer than 12 s. Overflow stays in the browser.
+  - Budget is charged only for hand-offs that run (found in real-browser testing).
+  - Video button: event-driven ("playing"), one per frame, listeners only while shown.
+  - Media detection: media/XHR responses only, no extraHeaders; deduplicated by
+    origin+path (found by the offline tests: concurrent duplicates and LL-HLS reloads).
+  - Popup: connection state, capture and button switches, page media, send a link.
+
+DOT application
+  - Bridge: extension origin + client header + loopback Host required; 4 concurrent
+    requests; one request per connection; 64 KiB bodies; token-bucket offers; at most
+    3 open windows; exclusive port binding; reads the body before refusing (Windows
+    resets connections closed with unread data). Checks each browser download (5 s
+    hard deadline) and declines what only the browser can fetch (401/403, Cloudflare).
+  - Removed: native messaging host and registration, browser-streamed transfers,
+    pairing tokens, the "Waiting for browser" state (old tasks reload as Paused).
+  - Single instance: a second launch focuses the running window and exits.
+  - Optional "Start DOT minimized when I sign in to Windows" (packaged app only).
+  - The download window opens on its own while DOT is minimized, like IDM's.
+  - State is no longer rewritten (with fsync) every second while idle.
+  - HLS master playlists keep only the best variant (previously every variant's
+    video track was copied into one MP4).
+
+Video pages via yt-dlp (any site yt-dlp supports, including YouTube)
+  - The video button sends the page to DOT when the player exposes no plain video
+    address (blob: players such as YouTube); with detected streams, the page is offered
+    alongside them. Popup: "Download the video on this page". Right-click works too.
+  - DOT's Download Video window reads the page with yt-dlp (title, length, site), lists
+    qualities with size estimates (H.264 preferred for compatibility, audio only as
+    M4A), downloads with progress, pause/resume, and publishes like any download.
+  - yt-dlp is found as yt-dlp.exe or as the yt_dlp module of an installed Python;
+    Node.js is used as the YouTube JavaScript runtime when Deno is absent. A missing
+    YouTube challenge solver is reported in the window. Started only by DOT, after
+    the user confirms; never by the browser.
+  - Live check on this PC: a 19-second public YouTube video was read in 3.7 s,
+    downloaded, merged, and verified (H.264 + AAC MP4).
+
+Fixes found while adding video support
+  - Engine race: a task's final status and the release of its worker now happen in one
+    locked step; a Resume/Retry clicked as a download stopped was silently ignored.
+  - Clicks (button, menu, popup) no longer share the automatic-capture allowances in the
+    extension or in DOT, so a burst of downloads cannot block a click that follows.
+  - The video button responds to genuine user clicks only.
+  - The main window stopped refreshing if its timer ran while a dropdown list (Quality,
+    Category) was open: tkinter's grab_current() raises KeyError for Tk's internal popdown
+    window. Downloads kept running unseen until a button press refreshed the list once.
+    The timer now checks the grab safely, always reschedules itself, and shows unexpected
+    errors in the status bar (the packaged app has no console to print them to).
+  - Video tasks show "Connecting" while yt-dlp reads the page, then "Downloading".
+  - Real yt-dlp pause/resume verified: a partial file paused mid-way is kept and resumed.
+
+Validation
+  - 70 unit tests (engine, bridge, extension safety, streams with a real two-variant
+    HLS master playlist) and 10 offline worker scenarios with a virtual clock.
+  - Real headless Brave 158 inside a Windows job with hard CPU/memory/process/time
+    limits: interception, fail-open, a 12-download burst, the video button, restart
+    with history (0 offers, 0 requests), and a start-up cost comparison with 0.2.
+    Results: artifacts/extension-validation/result.json.

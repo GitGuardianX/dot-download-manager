@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "DOT Download Manager",
+  "version": "0.4.0",
+  "description": "Send browser downloads and videos to DOT. Nothing runs until you download or play something.",
+  "minimum_chrome_version": "120",
+  "permissions": ["downloads", "storage", "contextMenus", "cookies", "webRequest"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": {"service_worker": "worker.js"},
+  "content_scripts": [{
+    "matches": ["http://*/*", "https://*/*"],
+    "js": ["content.js"],
+    "all_frames": true,
+    "run_at": "document_idle"
+  }],
+  "action": {"default_popup": "popup.html", "default_title": "DOT"},
+  "icons": {"128": "icon.png"},
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzfRfJ6rcNKAxJb2F4BTtO4Gd7LbvYH0pwWgj5CVsIgoKIXaI/czIObwfaTHJ910imjoIsq4OmV7pJjDsWDwUNYv4aJQUiowDE1VD+WHqEW71sHRh7EZ83njLSycEoPOcrp2DZ7MM7G6XvMMO/Gkud5id7xkkV47sY+AJB6mzvgw3Hvn4JoqHtI79mPwLKKlxpeDeA7U+DkrWZDxTMK5bW+WBbKYPGE749z1ucuFRQMmrPH1oysnfVRwuj65eEvEFVa2MRqAm27QJYEmjY7EOYrl/GvS5QExxZkLT7FsGqGCBPBMgStiYBbx+AGMHE1mB6Rd2wwNbDRZeD5baVK3+jQIDAQAB"
+}

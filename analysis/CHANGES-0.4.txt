@@ -1,0 +1,37 @@
+DOT 0.4: AN INSTALLED WINDOWS PROGRAM
+
+Goal: install and run like normal Windows software (IDM-style): a setup wizard, a program
+folder of exe/DLL files, Start Menu entry, tray icon, uninstaller, bundled video tools.
+
+Packaging
+  - PyInstaller one-folder build: DOT.exe + _internal\ (python314.dll, tcl86t.dll, tk86t.dll,
+    libssl/libcrypto, VCRUNTIME140, .pyd modules). Nothing is unpacked to %TEMP% at start.
+    DOT.exe carries Windows version details.
+  - Inno Setup installer dist\DOT-Setup-0.4.0.exe (103 MB): per-user by default (no admin
+    prompt) or all users; Start Menu, optional desktop shortcut, optional start in the tray
+    at sign-in; closes a running DOT before upgrading/uninstalling (posts its tray window's
+    exit message); clean upgrades; uninstaller removes everything and asks about user data.
+  - Bundled yt-dlp 2026.11.23, Deno 2.9.8, FFmpeg 8.1.3 (LGPL shared): pinned in
+    installer\tools.json, verified against the publishers' SHA-256 and locked in
+    installer\tools.lock.json by tools\fetch_tools.py. License notices in licenses\.
+
+App
+  - dotdm\paths.py: installed (library %LOCALAPPDATA%\DOT, Windows Downloads folder),
+    portable (portable.txt beside DOT.exe), source modes; tool lookup: user tools folder
+    (updates) -> bundled -> PATH.
+  - dotdm\tray.py: tray icon through ctypes (no new dependency): Open / Pause all / Start all /
+    Exit, notification balloon, re-added after an Explorer restart.
+  - Closing the window keeps DOT in the tray (setting); a second launch shows the running DOT;
+    "DOT.exe --quit" exits it gracefully; --minimized starts in the tray.
+  - "Connect your browser" guide (first run and Settings): opens the browser's extensions
+    page, shows the folder to load, turns green when the extension checks in.
+  - Settings: keep running in the tray, Connect your browser, Update yt-dlp.
+  - The extension reports its version; DOT asks for a Reload when the browser runs an older one.
+
+Validation
+  - 89 unit tests (new: paths, tray round-trip with a private window class, close-to-tray and
+    tray menu, bundled-tool preference, yt-dlp update, installer/app consistency).
+  - Bundled tools read a YouTube video through DOT's code with no challenge warning.
+  - tools\smoke_installer.py: silent per-user install to a temp folder (7.7 s), files, Apps
+    list and Start Menu entries, a verified download by the installed DOT.exe, bundled tool
+    versions, tray icon, second-launch hand-over, --quit, then a clean uninstall.
