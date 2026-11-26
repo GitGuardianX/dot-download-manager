@@ -38,6 +38,7 @@ const httpUrl = url => typeof url === "string" && url.length <= 8192 && /^https?
 const basename = path => String(path || "").split(/[\\/]/).pop().slice(0, 255);
 const extensionOf = name => (/\.([a-z0-9]{1,12})$/i.exec(name) || [])[1]?.toLowerCase() || "";
 const pageKey = url => { try { const u = new URL(url); return u.origin + u.pathname; } catch { return ""; } };
+const originOf = url => { try { return new URL(url).origin; } catch { return ""; } };
 
 // ---- settings ---------------------------------------------------------------------------
 let cached = null;
@@ -255,6 +256,30 @@ function ranked(items) {
   return [...streams, ...items.filter(i => i.kind !== "stream")];
 }
 
+// One menu entry per stream: an HLS master playlist's variant playlists sit in its folder.
+function distinct(items) {
+  const folders = new Set();
+  return items.filter(item => {
+    if (item.kind !== "stream") return true;
+    const folder = item.key.slice(0, item.key.lastIndexOf("/") + 1);
+    if (folders.has(folder)) return false;
+    folders.add(folder);
+    return true;
+  });
+}
+
+// Replay the request the page's player made: stream hosts often accept only requests with the
+// player's site as referrer and, from another site, an Origin header. The tab title names the file.
+async function playerContext(tab, url) {
+  const context = {title: String(tab?.title || "").slice(0, 200)};
+  if (!tab) return context;
+  const known = (await currentMedia(tab.id, tab.url)).find(item => item.key === pageKey(url));
+  const initiator = /^https?:\/\/[^/]+$/.test(known?.initiator || "") ? known.initiator : "";
+  if (initiator && initiator !== originOf(tab.url)) context.referrer = initiator + "/";  // An embedded player.
+  if (initiator && initiator !== originOf(url)) context.origin = initiator;
+  return context;
+}
+
 async function currentMedia(tabId, tabUrl) {
   const entry = await tabMedia(tabId);
   if (entry.page && tabUrl && entry.page !== pageKey(tabUrl)) { forget(tabId); return []; }
@@ -275,8 +300,12 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
   if (MANIFEST_MIME.test(mime) || MANIFEST_URL.test(details.url)) kind = "stream";
   else if (details.type === "media" && /^(video|audio)\//.test(mime) && mime !== "video/mp2t") kind = mime.startsWith("audio/") ? "audio" : "video";
   if (!kind) return;
+  if (kind === "stream" && length.trim() === "0") return;  // An empty placeholder playlist: nothing to download.
   const size = Number((/\/(\d+)\s*$/.exec(range) || [])[1] || length) || null;
-  remember(details.tabId, {url: details.url, kind, mime, size, frameId: details.frameId}).catch(() => {});
+  // The initiator is the origin of the document whose player made the request (an embedded
+  // player's own site, for example); DOT replays it so the stream host accepts DOT's requests.
+  const initiator = typeof details.initiator === "string" ? details.initiator : "";
+  remember(details.tabId, {url: details.url, kind, mime, size, frameId: details.frameId, initiator}).catch(() => {});
 }, {urls: ["http://*/*", "https://*/*"], types: ["media", "xmlhttprequest"]}, ["responseHeaders"]);
 
 chrome.tabs.onUpdated.addListener((tabId, change) => {
@@ -290,8 +319,7 @@ chrome.tabs.onRemoved.addListener(tabId => forget(tabId));
 // reloading, while sender.url keeps the address the frame was first loaded with, so the
 // content script reports location.href. It is accepted only from the sender's own origin.
 function currentPage(reported, sender, tab) {
-  const origin = url => { try { return new URL(url).origin; } catch { return ""; } };
-  if (httpUrl(reported) && origin(reported) === origin(sender.url || tab?.url)) return reported;
+  if (httpUrl(reported) && originOf(reported) === originOf(sender.url || tab?.url)) return reported;
   if (sender.frameId === 0 && httpUrl(tab?.url)) return tab.url;
   return httpUrl(sender.url) ? sender.url : (httpUrl(tab?.url) ? tab.url : "");
 }
@@ -317,18 +345,21 @@ async function respond(message, sender) {
     }
     case "send": {
       const kind = String(message.kind || "");
-      return sendExplicit({source: kind === "page" ? "page" : kind ? "media" : "link", url: message.url, kind,
-                           mime: String(message.mime || ""), referrer});
+      const offer = {source: kind === "page" ? "page" : kind ? "media" : "link", url: message.url, kind,
+                     mime: String(message.mime || ""), referrer};
+      return sendExplicit(kind && kind !== "page" ? {...offer, ...await playerContext(tab, message.url)} : offer);
     }
     case "video": {
       if (!tab) return {ok: false, error: "This request did not come from a tab."};
-      if (httpUrl(message.src)) return sendExplicit({source: "media", url: message.src, referrer});
+      if (httpUrl(message.src)) {
+        return sendExplicit({source: "media", url: message.src, referrer, ...await playerContext(tab, message.src)});
+      }
       // The page (or the embedded player's frame) can be read by yt-dlp in DOT: YouTube and
       // many other sites never expose a plain video address to the browser.
       const page = currentPage(message.page, sender, tab);
       const items = await currentMedia(tab.id, tab.url);
       const sameFrame = items.filter(item => item.frameId === sender.frameId);
-      const choices = (sameFrame.length ? sameFrame : items).slice(0, 7)
+      const choices = distinct(sameFrame.length ? sameFrame : items).slice(0, 7)
         .map(({url, kind, mime, size}) => ({url, kind, mime, size}));
       if (!choices.length) {
         return page ? sendExplicit({source: "page", url: page, kind: "page", referrer})

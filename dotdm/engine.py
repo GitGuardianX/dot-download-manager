@@ -166,7 +166,7 @@ class Task:
     active_connections: int = 0
     category_name: str = ""
     description: str = ""
-    transport: str = "http"  # "http", "stream" (FFmpeg) or "site" (yt-dlp video page).
+    transport: str = "http"  # "http", "stream" (FFmpeg) or "site" (yt-dlp: video page or browser stream).
     browser_context: bool = False
     stream: bool = False
     site_format: str = ""   # yt-dlp format selector for "site" tasks.
@@ -386,7 +386,7 @@ class DownloadManager:
                         filename=self._unique_name(destination, filename or url_filename(url)), connections=count,
                         use_server_filename=not bool(filename), referer=referer, scheduled_at=scheduled_at,
                         browser_context=browser_context, category_name=category_name, description=description[:500], stream=stream,
-                        transport="site" if site else "http", site_format=site_format[:300] if site else "")
+                        transport="site" if site else "http", site_format=site_format[:300] if site or stream else "")
             self.request_context[task.id] = context
             if paused:
                 task.status = "Paused"
@@ -813,8 +813,19 @@ class DownloadManager:
                 self._assemble(task, control)
                 return
             if task.stream or urllib.parse.urlsplit(task.url).path.lower().endswith((".m3u8", ".mpd")):
+                from .sites import command, download_site
                 from .streams import download_stream
-                download_stream(self, task, control)
+                if command():  # Fetches playlists and segments like a browser; FFmpeg only joins them.
+                    try:
+                        download_site(self, task, control)
+                    except DownloadError as first:
+                        control.check()  # A pause or cancel is not a failure to recover from.
+                        try:
+                            download_stream(self, task, control)  # Some streams only FFmpeg reads.
+                        except DownloadError:
+                            raise first from None  # yt-dlp's explanation is the more useful one.
+                else:
+                    download_stream(self, task, control)
                 self._assemble(task, control)
                 return
             # Recover a crash between publication and the completed-state checkpoint.

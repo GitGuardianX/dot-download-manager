@@ -8,7 +8,7 @@ video downloads from YouTube and many other sites.
 
 ## Download
 
-Get **DOT-Setup-0.4.0.exe** from the [latest release](https://github.com/GitGuardianX/dot-download-manager/releases/latest)
+Get **DOT-Setup-0.4.2.exe** from the [latest release](https://github.com/GitGuardianX/dot-download-manager/releases/latest)
 (Windows 10/11, 64-bit).
 
 - It installs for your Windows account only, with no admin prompt, into `%LOCALAPPDATA%\Programs\DOT`.
@@ -26,8 +26,9 @@ Get **DOT-Setup-0.4.0.exe** from the [latest release](https://github.com/GitGuar
   queues, scheduling, a speed limit and SHA-256 checks.
 - **Browser integration (Brave, Chrome, Edge):** downloads you start in the browser open DOT's
   Download File Info window with the size already checked; the browser's copy is cancelled.
-- **Video button:** **Download with DOT** appears over playing videos. Direct files are sent as-is;
-  HLS/DASH streams are joined by FFmpeg.
+- **Video button:** **Download with DOT** appears over playing videos. Direct files are sent as-is.
+  For HLS/DASH streams DOT lists every quality with its bitrate, length and size (like IDM), then
+  downloads the pieces with the browser's referrer and user agent and saves one MP4.
 - **Video sites:** YouTube and the many other sites yt-dlp supports, with a choice of quality
   (1080p, 720p, … or audio only).
 - **Right-click** any link or video: **Download with DOT**.

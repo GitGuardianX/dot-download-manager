@@ -8,7 +8,10 @@ import tkinter as tk
 import unittest
 from pathlib import Path
 
-from dotdm.ui import Application, DownloadConfirmation
+from unittest.mock import patch
+
+from dotdm import sites
+from dotdm.ui import Application, DownloadConfirmation, VideoConfirmation
 
 
 class FakeTray:
@@ -108,6 +111,38 @@ class UiTest(unittest.TestCase):
                 break
             time.sleep(0.05)
         self.assertTrue(self.app.tray.stopped, "Exit removes the tray icon")
+
+    def test_stream_offer_lists_qualities_like_idm(self):
+        formats = [{"format_id": "4213", "ext": "mp4", "height": 1920, "vcodec": "avc1", "acodec": "mp4a", "tbr": 4114}]
+        info = {"title": "master", "duration": 212, "site": "Generic", "warning": "",
+                "choices": sites.choices({"duration": 212, "formats": formats})}
+        seen = {}
+
+        def describe(url, timeout=60, referer="", headers=None, stream=False):
+            seen.update(url=url, referer=referer, headers=headers, stream=stream)
+            return info
+        offer = {"id": "b" * 32, "url": "https://cdn.example/v/master.m3u8", "referer": "https://site.example/watch?v=1",
+                 "headers": {"User-Agent": "TestBrowser/1", "Origin": "https://site.example"}, "filename": "master.mp4",
+                 "total": None, "mime": "", "stream": True, "site": False, "source": "media", "warning": "",
+                 "title": "A clip - Site", "probed": True}
+        with patch.object(sites, "command", return_value=["yt-dlp"]), patch.object(sites, "describe", side_effect=describe):
+            self.app.bridge.open_offers[offer["id"]] = time.monotonic()
+            self.app.bridge.pending.put(offer)
+            self.app.tick()
+            dialog = next(w for w in self.app.winfo_children() if isinstance(w, VideoConfirmation))
+            until = time.monotonic() + 5
+            while dialog.info is None and time.monotonic() < until:
+                self.app.update()
+                time.sleep(0.05)
+        self.assertEqual((seen["referer"], seen["headers"]["Origin"], seen["stream"]), (offer["referer"], "https://site.example", True),
+                         "the stream is read as a stream, with the browser's request details")
+        self.assertIn("A clip - Site", dialog.title_label.cget("text"), "named after the page, not 'master'")
+        self.assertTrue(dialog.quality.get().startswith("1920p · 4114 kbps  ·  ~"), dialog.quality.get())
+        self.assertEqual(Path(dialog.path.get()).name, "A clip - Site.mp4")
+        dialog.submit(True)  # Download later: nothing starts in the test.
+        task = self.app.manager.snapshot()[-1]
+        self.assertEqual((task["stream"], task["site_format"], task["referer"]),
+                         (True, info["choices"][0]["format"], offer["referer"]))
 
     def test_close_button_exits_when_the_tray_is_off(self):
         self.app.tray = FakeTray()

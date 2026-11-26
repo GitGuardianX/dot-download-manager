@@ -35,3 +35,55 @@ Validation
   - tools\smoke_installer.py: silent per-user install to a temp folder (7.7 s), files, Apps
     list and Start Menu entries, a verified download by the installed DOT.exe, bundled tool
     versions, tray icon, second-launch hand-over, --quit, then a clean uninstall.
+
+DOT 0.4.1: STREAMS THAT IDM COULD DOWNLOAD BUT DOT COULD NOT
+
+Report: on a video site, DOT's menu offered master.m3u8 and index-v1-a1.m3u8 but both
+failed ("Server returned 4XX Client Error, but not one of 40{0,1,3,4}"), while IDM
+downloaded the same video.
+
+Cause (measured against the real host): the stream host refuses any request whose Host
+header is not the first header (HTTP 410 Gone; 412 without a referrer). FFmpeg's HTTP
+client always sends Host fifth, after User-Agent, Referer, Accept, Range and Connection,
+and that order cannot be changed. Python, curl, browsers and IDM send Host first. DOT's
+referrer and user agent were correct.
+
+Fixes
+  - Browser streams (HLS/DASH) are downloaded by the bundled yt-dlp with the browser's
+    referrer, user agent, Origin and the stream host's cookies; FFmpeg only joins the
+    pieces locally. FFmpeg alone remains a fallback (no yt-dlp, or yt-dlp cannot read it).
+  - Clicking a stream opens the Download Video window with an IDM-style quality list
+    ("1920p · 4213 kbps · ~106 MiB", length) and the page's title as the file name.
+  - The extension records which site's player requested a stream and replays it: an
+    embedded player's site becomes the referrer, and an Origin header is sent for streams
+    on another host. Variant playlists of one stream are one menu entry, not several.
+  - yt-dlp runs inside a Windows job object (dotdm/processes.py). The bundled yt-dlp.exe is
+    a launcher whose worker processes kept downloading after Pause, cancel or exit; now
+    stopping ends the whole tree immediately, and Windows ends it if DOT exits.
+  - Silent (video-only) streams no longer fail format selection.
+
+Validation: 96 unit tests, including a local host with the same Host-first rule (yt-dlp
+succeeds, FFmpeg is refused), and a launcher whose worker must stop on Pause (fails on
+0.4.0, passes now); capped-Brave functional checks; a live read and partial download of
+the reported stream (quality list, 19 MiB received, clean pause, files released).
+
+DOT 0.4.2: DAILYMOTION SAVED THE PLAYLIST INSTEAD OF THE VIDEO
+
+Report: on Dailymotion, both "Video stream (HLS)" choices finished as "Completed" with
+331-byte files that were not videos; a third failed.
+
+Cause: Dailymotion's stream links end in "manifest.m3u8#cell=cf3" and its CDN labels the
+playlist "video/mp4". yt-dlp recognises an HLS link by its ".m3u8" ending, but the "#..."
+part hid it, so yt-dlp trusted the wrong label and saved the playlist text as the video.
+The failed one was a placeholder playlist the player loaded empty ("?error=").
+
+Fixes
+  - The "#..." part of a stream link (never sent to servers) is removed before yt-dlp or
+    FFmpeg reads it.
+  - A stream download that produces a playlist is a failure, never "Completed"; DOT then
+    tries FFmpeg.
+  - Menu entries name each stream ("Video stream (HLS) · h264_aac_hq"), and empty
+    placeholder playlists are not offered.
+
+Validation: a local host mimicking Dailymotion (video/mp4 label, #cell=cf3) saves a playable
+MP4 (fails on 0.4.1); the reported stream downloads as H.264 848x480 + AAC, 23.6 s.

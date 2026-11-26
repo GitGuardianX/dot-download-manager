@@ -141,7 +141,11 @@ class BrowserBridge:
             context["Cookie"] = cookies
         if agent := str(data.get("userAgent") or "")[:512]:
             context["User-Agent"] = agent
+        # The origin of the page's player, which stream hosts may require (a bare origin only).
+        if re.fullmatch(r"https?://[A-Za-z0-9.-]+(?::\d{1,5})?", origin := str(data.get("origin") or "")[:300]):
+            context["Origin"] = origin
         context = request_headers(context)
+        title = re.sub(r"[\x00-\x1f\x7f]+", " ", str(data.get("title") or ""))[:200].strip()  # The tab's title.
         mime = str(data.get("mime") or "")[:200]
         size = data.get("size") if type(data.get("size")) is int and data["size"] >= 0 else None
         filename = safe_filename(str(data.get("filename") or "")[:255] or url_filename(url))
@@ -175,7 +179,7 @@ class BrowserBridge:
         offer_id = uuid.uuid4().hex
         offer = {"id": offer_id, "url": url, "referer": referrer, "headers": context, "filename": filename,
                  "total": size, "mime": mime, "stream": stream, "site": site, "source": source, "warning": warning,
-                 "probed": True}
+                 "title": title, "probed": True}
         with self.lock:
             if len(self.open_offers) >= MAX_PENDING:
                 return 429, {"accepted": False, "reason": "DOT already has download windows open. The browser kept this download."}

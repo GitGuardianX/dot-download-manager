@@ -11,12 +11,32 @@ import unittest
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from unittest.mock import patch
+
+from dotdm import sites
 from dotdm.engine import DownloadManager
 
 
 class QuietFiles(SimpleHTTPRequestHandler):
     def log_message(self, *_):
         pass
+
+
+class StrictHost(QuietFiles):
+    """Like a real stream host that refused FFmpeg (HTTP 410): the Host header must come first,
+    as browsers send it, and a Referer is required."""
+    def send_head(self):
+        names = [name.lower() for name in self.headers.keys()]
+        if not names or names[0] != "host" or not self.headers.get("Referer"):
+            self.send_error(410, "Gone")
+            return None
+        return super().send_head()
+
+
+class MislabeledHost(QuietFiles):
+    """Like Dailymotion's CDN: HLS playlists are labelled video/mp4."""
+    def guess_type(self, path):
+        return "video/mp4" if str(path).endswith(".m3u8") else super().guess_type(path)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg and FFprobe are required for stream integration tests")
@@ -39,36 +59,46 @@ class StreamsTest(unittest.TestCase):
                                "-hls_segment_filename", (cls.root / "variant%v_%03d.ts").as_posix(),
                                (cls.root / "variant%v.m3u8").as_posix()], check=True, creationflags=flags)
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(QuietFiles, directory=str(cls.root)))
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
+        cls.strict = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(StrictHost, directory=str(cls.root)))
+        cls.mislabeled = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(MislabeledHost, directory=str(cls.root)))
+        cls.threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in (cls.server, cls.strict, cls.mislabeled)]
+        for thread in cls.threads:
+            thread.start()
 
     @classmethod
     def tearDownClass(cls):
-        cls.server.shutdown()
-        cls.server.server_close()
-        cls.thread.join()
+        for server in (cls.server, cls.strict, cls.mislabeled):
+            server.shutdown()
+            server.server_close()
+        for thread in cls.threads:
+            thread.join()
         cls.temp.cleanup()
 
-    def check_stream(self, name):
-        manager = DownloadManager(self.root / (name + "-state"), self.root / "downloads")
+    def run_stream(self, name, server=None, **options):
+        server = server or self.server
+        manager = DownloadManager(self.root / f"{name}-{server.server_port}-{time.monotonic_ns()}", self.root / "downloads")
         try:
-            identity = manager.add(f"http://127.0.0.1:{self.server.server_port}/{name}")
-            until = time.monotonic() + 20
+            identity = manager.add(f"http://127.0.0.1:{server.server_port}/{name}", **options)
+            until = time.monotonic() + 30
             while time.monotonic() < until:
                 task = next(t for t in manager.snapshot() if t["id"] == identity)
                 if task["status"] in ("Completed", "Failed"):
                     break
                 time.sleep(.05)
-            self.assertEqual(task["status"], "Completed", task["error"])
-            self.assertEqual(Path(task["filename"]).suffix, ".mp4")
-            output = Path(task["directory"]) / task["filename"]
-            self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), task["sha256"])
-            probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width", "-of", "json", str(output)], capture_output=True, check=True)
-            streams = json.loads(probe.stdout)["streams"]
-            self.assertTrue(any(stream["codec_type"] == "video" for stream in streams))
-            return streams
+            return task
         finally:
             manager.close()
+
+    def check_stream(self, name, server=None, **options):
+        task = self.run_stream(name, server, **options)
+        self.assertEqual(task["status"], "Completed", task["error"])
+        self.assertEqual(Path(task["filename"]).suffix, ".mp4")
+        output = Path(task["directory"]) / task["filename"]
+        self.assertEqual(hashlib.sha256(output.read_bytes()).hexdigest(), task["sha256"])
+        probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width", "-of", "json", str(output)], capture_output=True, check=True)
+        streams = json.loads(probe.stdout)["streams"]
+        self.assertTrue(any(stream["codec_type"] == "video" for stream in streams))
+        return streams
 
     def test_hls_saves_playable_mp4(self):
         self.check_stream("index.m3u8")
@@ -80,3 +110,22 @@ class StreamsTest(unittest.TestCase):
 
     def test_dash_saves_playable_mp4(self):
         self.check_stream("manifest.mpd")
+
+    @unittest.skipUnless(sites.command(), "yt-dlp is required")
+    def test_host_that_refuses_ffmpeg_is_downloaded_with_ytdlp(self):
+        self.check_stream("index.m3u8", self.strict, referer="https://site.example/watch?v=1")
+
+    def test_ffmpeg_alone_is_refused_by_that_host(self):
+        with patch("dotdm.sites.command", return_value=None):
+            task = self.run_stream("index.m3u8", self.strict, referer="https://site.example/watch?v=1")
+        self.assertEqual(task["status"], "Failed")
+        self.assertIn("4XX", task["error"], "why browser streams go through yt-dlp")
+
+    @unittest.skipUnless(sites.command(), "yt-dlp is required")
+    def test_mislabeled_playlist_with_a_fragment_saves_the_video(self):
+        # Dailymotion: ".../manifest.m3u8#cell=cf3" served as video/mp4. 0.4.1 saved the playlist text.
+        self.check_stream("index.m3u8#cell=cf3", self.mislabeled, referer="https://site.example/")
+
+    def test_ffmpeg_fallback_still_saves_hls(self):
+        with patch("dotdm.sites.command", return_value=None):
+            self.check_stream("index.m3u8")

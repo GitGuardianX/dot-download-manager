@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DOT Download Manager",
-  "version": "0.4.0",
+  "version": "0.4.2",
   "description": "Send browser downloads and videos to DOT. Nothing runs until you download or play something.",
   "minimum_chrome_version": "120",
   "permissions": ["downloads", "storage", "contextMenus", "cookies", "webRequest"],

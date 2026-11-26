@@ -1,4 +1,4 @@
-DOT DOWNLOAD MANAGER 0.4.0
+DOT DOWNLOAD MANAGER 0.4.2
 
 A download manager for Windows in the spirit of IDM: parallel byte-range transfers,
 pause/resume, queues, scheduling, a speed limit, SHA-256 checks, video downloads from
@@ -8,7 +8,7 @@ YouTube and many other sites, and a browser extension that sends downloads to DO
 INSTALL
 -------------------------------------------------------------------------------
 
-Run DOT-Setup-0.4.0.exe. By default it installs for your Windows account only, with no
+Run DOT-Setup-0.4.2.exe. By default it installs for your Windows account only, with no
 admin prompt, to %LOCALAPPDATA%\Programs\DOT (the wizard also offers "all users").
 Options: a desktop shortcut, and "Start DOT in the tray when I sign in to Windows"
 (recommended: browser downloads only reach DOT while it is running).
@@ -44,8 +44,10 @@ What it does:
   - Downloads you start in the browser open DOT's Download File Info window, with the
     file size already checked. The browser's copy is cancelled.
   - A "Download with DOT" button appears over a playing video. Direct video files are sent
-    as-is; streams use the HLS/DASH playlist; sites such as YouTube are read with yt-dlp,
-    and DOT offers every quality (1080p, 720p, ... or audio only).
+    as-is. For HLS/DASH streams DOT lists every quality with bitrate, length and size, then
+    downloads the pieces with the browser's referrer and user agent into one MP4. Sites
+    such as YouTube are read with yt-dlp, and DOT offers every quality (1080p, 720p, ...
+    or audio only).
   - Right-click a link or video: "Download with DOT". The toolbar popup shows the
     connection, media found on the page, and "Download the video on this page".
 When DOT cannot take a download (closed, refused by the site, several at once), the

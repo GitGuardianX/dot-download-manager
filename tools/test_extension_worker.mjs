@@ -39,7 +39,7 @@ function world({dot = "up", probeMs = 300, accept = true} = {}) {
     stats.fetch.push({path, at: now});
     assert.equal(new URL(url).hostname, "127.0.0.1", "only loopback may be contacted");
     assert.equal(init.method, "POST");
-    assert.equal(init.headers["X-DOT-Client"], "dot-extension/0.4.0", "the extension reports its version");
+    assert.equal(init.headers["X-DOT-Client"], "dot-extension/0.4.2", "the extension reports its version");
     if (dot === "down") throw new TypeError("Failed to fetch");
     if (dot === "hang") return delay(10 ** 9, init.signal);
     if (path === "/v1/hello") return reply(200, {app: "DOT"});
@@ -56,7 +56,7 @@ function world({dot = "up", probeMs = 300, accept = true} = {}) {
   const forbidden = name => () => { throw new Error(`${name} must never be used`); };
   const chrome = {
     runtime: {id: "dot-test", onInstalled: event("onInstalled"), onMessage: event("onMessage"),
-              getManifest: () => ({version: "0.4.0"}),
+              getManifest: () => ({version: "0.4.2"}),
               sendNativeMessage: forbidden("sendNativeMessage"), connectNative: forbidden("connectNative")},
     storage: {
       local: {get: async defaults => ({...defaults, ...local}), set: async value => { stats.localWrites++; Object.assign(local, value); }},
@@ -106,8 +106,9 @@ function world({dot = "up", probeMs = 300, accept = true} = {}) {
     record.async = results[0] === true;
     return record;
   }
-  const media = (url, mime, type = "xmlhttprequest", tabId = 7) => listeners["webRequest.onHeadersReceived"]
-    .forEach(fn => fn({tabId, frameId: 0, type, url, statusCode: 200, responseHeaders: [{name: "Content-Type", value: mime}]}));
+  const media = (url, mime, type = "xmlhttprequest", tabId = 7, initiator = "https://video.example") =>
+    listeners["webRequest.onHeadersReceived"].forEach(fn => fn({tabId, frameId: 0, type, url, initiator, statusCode: 200,
+                                                               responseHeaders: [{name: "Content-Type", value: mime}]}));
   const message = (body, sender = {id: "dot-test", tab: {id: 7, url: "https://video.example/watch?v=1"}, frameId: 0}) =>
     new Promise(resolve => listeners.onMessage.forEach(fn => fn(body, sender, resolve)));
   return {stats, timers, listeners, advance, download, media, message, now: () => now, local};
@@ -241,6 +242,52 @@ await check("video button prefers the master playlist and sends it", async () =>
   assert.equal(sent.ok, true);
   assert.equal(w.stats.handoffBodies.at(-1).source, "media");
   assert.equal(w.stats.handoffBodies.at(-1).referrer, "https://video.example/watch?v=1");
+});
+
+await check("streams carry the player's referrer, origin and the tab title; variants are one entry", async () => {
+  const w = world();
+  const sender = {id: "dot-test", frameId: 0, tab: {id: 7, url: "https://video.example/watch?v=1", title: "A clip - Video"}};
+  // An embedded player from another site loads the stream.
+  w.media("https://cdn.example/v/1080/master.m3u8", "application/vnd.apple.mpegurl", "xmlhttprequest", 7, "https://player.example");
+  await w.advance(100);
+  w.media("https://cdn.example/v/1080/index-v1-a1.m3u8", "application/vnd.apple.mpegurl", "xmlhttprequest", 7, "https://player.example");
+  await w.advance(100);
+  const reply = await w.message({type: "video", src: "blob:https://player.example/x"}, sender);
+  assert.equal(reply.choices.map(c => c.kind).join(","), "stream,page", "the variant playlist is not listed again");
+  assert.ok(reply.choices[0].url.endsWith("/master.m3u8"));
+  let sending = w.message({type: "send", url: reply.choices[0].url, kind: "stream", mime: "application/vnd.apple.mpegurl"}, sender);
+  await w.advance(1000);
+  assert.equal((await sending).ok, true);
+  let body = w.stats.handoffBodies.at(-1);
+  assert.equal(body.referrer, "https://player.example/", "the embedded player's site is the referrer");
+  assert.equal(body.origin, "https://player.example");
+  assert.equal(body.title, "A clip - Video");
+  // The site's own player with a CDN stream: the page stays the referrer, the Origin is added.
+  const w2 = world();
+  w2.media("https://cdn.example/hls/master.m3u8", "application/vnd.apple.mpegurl");
+  await w2.advance(100);
+  sending = w2.message({type: "send", url: "https://cdn.example/hls/master.m3u8", kind: "stream", mime: ""}, sender);
+  await w2.advance(1000);
+  await sending;
+  body = w2.stats.handoffBodies.at(-1);
+  assert.equal(body.referrer, "https://video.example/watch?v=1");
+  assert.equal(body.origin, "https://video.example");
+  // The yt-dlp page choice carries no player details.
+  sending = w2.message({type: "send", url: "https://video.example/watch?v=1", kind: "page", mime: ""}, sender);
+  await w2.advance(1000);
+  await sending;
+  body = w2.stats.handoffBodies.at(-1);
+  assert.equal(body.source, "page");
+  assert.equal(body.origin, undefined);
+});
+
+await check("empty placeholder playlists are not offered", async () => {
+  const w = world();
+  w.listeners["webRequest.onHeadersReceived"].forEach(fn => fn({tabId: 7, frameId: 0, type: "xmlhttprequest",
+    url: "https://cdn.example/manifest/video/x.m3u8?error=1", initiator: "https://video.example", statusCode: 200,
+    responseHeaders: [{name: "Content-Type", value: "application/vnd.apple.mpegurl"}, {name: "Content-Length", value: "0"}]}));
+  await w.advance(100);
+  assert.equal((await w.message({type: "media", tabId: 7}, {id: "dot-test"})).items.length, 0);
 });
 
 await check("a player with no detectable stream (YouTube) sends the page to DOT", async () => {

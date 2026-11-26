@@ -319,12 +319,15 @@ class VideoConfirmation(Dialog):
         self.offer, self.closed, self.after_id = offer, False, None
         self.info, self.options, self.path_edited, self._setting = None, [], False, False
         self.results = queue.Queue()
+        # A stream the page's player loaded (HLS/DASH), rather than a page for yt-dlp to read.
+        self.stream = bool(offer.get("stream")) and not offer.get("site")
         super().__init__(app, "Download Video · DOT", "740x470")
         label(self.body, "Download video", font=(FONT, 19, "bold")).pack(anchor="w")
-        self.title_label = label(self.body, "Reading the page with yt-dlp…", color=MUTED, wraplength=680, justify="left")
+        reading = "Reading the stream…" if self.stream else "Reading the page with yt-dlp…"
+        self.title_label = label(self.body, reading, color=MUTED, wraplength=680, justify="left")
         self.title_label.pack(anchor="w", pady=(5, 14))
         self.url = tk.StringVar(value=offer["url"])
-        self.field("Page", self.url).configure(state="readonly")
+        self.field("Stream" if self.stream else "Page", self.url).configure(state="readonly")
         row = tk.Frame(self.body, bg=SIDE)
         row.pack(fill="x", pady=(14, 0))
         label(row, "Quality", color=MUTED).pack(side="left", padx=(0, 14))
@@ -345,8 +348,9 @@ class VideoConfirmation(Dialog):
         button(save, "Browse", self.browse, small=True).pack(side="right", padx=(8, 0))
         self.description = tk.StringVar()
         self.field("Description (optional)", self.description)
-        self.note = label(self.body, "Downloaded with your installed yt-dlp; FFmpeg joins video and audio.",
-                          color=MUTED, font=(FONT, 9), wraplength=680, justify="left")
+        note = ("Downloaded piece by piece with your browser's referrer and user agent, then saved as one MP4."
+                if self.stream else "Downloaded with yt-dlp; FFmpeg joins video and audio.")
+        self.note = label(self.body, note, color=MUTED, font=(FONT, 9), wraplength=680, justify="left")
         self.note.pack(anchor="w", pady=(12, 14))
         actions = tk.Frame(self.body, bg=SIDE)
         actions.pack(fill="x")
@@ -378,7 +382,12 @@ class VideoConfirmation(Dialog):
 
     def load(self):
         try:
-            self.results.put(("ok", sites.describe(self.offer["url"])))
+            if self.stream:  # The stream host expects the browser's own request details.
+                info = sites.describe(self.offer["url"], referer=self.offer.get("referer", ""),
+                                      headers=self.offer.get("headers"), stream=True)
+            else:  # A page is read without the browser's cookies or logins.
+                info = sites.describe(self.offer["url"])
+            self.results.put(("ok", info))
         except Exception as exc:
             self.results.put(("error", str(exc) or type(exc).__name__))
 
@@ -390,16 +399,20 @@ class VideoConfirmation(Dialog):
             return
         self.after_id = None
         if kind == "error":
-            self.title_label.configure(text="DOT could not read a video on this page.", fg=RED)
+            failed = "DOT could not read this stream." if self.stream else "DOT could not read a video on this page."
+            self.title_label.configure(text=failed, fg=RED)
             self.quality.set("Unavailable")
             self.note.configure(text=value, fg=RED)
             return
+        if self.stream:
+            # A playlist's own name ("master") says nothing: the tab's title names the video, as in IDM.
+            value = {**value, "title": self.offer.get("title") or value["title"], "site": "Stream"}
         self.info, self.options = value, value["choices"]
         details = [value["title"]] + ([duration_text(value["duration"])] if value["duration"] else []) + ([value["site"]] if value["site"] else [])
         self.title_label.configure(text="  ·  ".join(details), fg=FG)
         self.combo.configure(values=[option["label"] + (f"  ·  ~{size(option['size'])}" if option["size"] else "")
                                      for option in self.options], state="readonly")
-        heights = [int(o["label"][:-1]) if o["label"][:-1].isdigit() else 0 for o in self.options]
+        heights = [option.get("height") or 0 for option in self.options]
         self.combo.current(next((i for i, h in enumerate(heights) if 0 < h <= 1080), 0))
         self.apply_choice()
         self.start.configure(state="normal")
@@ -438,9 +451,14 @@ class VideoConfirmation(Dialog):
             path = Path(self.path.get()).expanduser().resolve()
             if not path.name:
                 raise ValueError("Choose a filename.")
-            task_id = self.app.manager.add(self.offer["url"], directory=str(path.parent), filename=safe_filename(path.name),
-                paused=later, referer=self.offer.get("referer", ""), site=True, site_format=option["format"],
-                category_name="Music" if option["audio"] else "Video", description=self.description.get())
+            common = dict(directory=str(path.parent), filename=safe_filename(path.name), paused=later,
+                          referer=self.offer.get("referer", ""), site_format=option["format"],
+                          category_name="Music" if option["audio"] else "Video", description=self.description.get())
+            if self.stream:  # Keeps the browser's request details (memory only) for the stream host.
+                task_id = self.app.manager.add(self.offer["url"], headers=self.offer.get("headers"), browser_context=True,
+                                               stream=True, **common)
+            else:
+                task_id = self.app.manager.add(self.offer["url"], site=True, **common)
             self.app.filter = "All downloads"
             self.app.search.set("")
             self.app.refresh()
@@ -1134,7 +1152,9 @@ class Application(tk.Tk):
             if not self.grab_active():
                 try:
                     offer = self.bridge.pending.get_nowait()
-                    (VideoConfirmation if offer.get("site") else DownloadConfirmation)(self, offer)
+                    # Pages and (with yt-dlp available) streams get the quality list, as in IDM.
+                    video = offer.get("site") or (offer.get("stream") and sites.command())
+                    (VideoConfirmation if video else DownloadConfirmation)(self, offer)
                 except queue.Empty:
                     pass
         finally:

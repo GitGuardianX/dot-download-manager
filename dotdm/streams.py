@@ -1,4 +1,7 @@
-"""Save ordinary HLS/DASH media with FFmpeg (bundled with the installed DOT, else from PATH)."""
+"""Save HLS/DASH media with FFmpeg alone: the fallback when yt-dlp is unavailable.
+
+FFmpeg's HTTP client sends the Host header after its other headers; some stream hosts refuse
+such requests (HTTP 410/412), so browser streams normally go through yt-dlp (sites.py)."""
 from __future__ import annotations
 
 import os
@@ -8,7 +11,7 @@ import subprocess
 import threading
 from collections import deque
 from http.cookies import SimpleCookie
-from urllib.parse import urlsplit
+from urllib.parse import urldefrag, urlsplit
 
 from . import paths
 from .engine import DownloadError, Segment
@@ -31,6 +34,8 @@ def download_stream(manager, task, control):
         value = context.get(key) or (task.referer if key == "referer" else "")
         if value:
             args += [option, value]
+    if context.get("origin"):
+        args += ["-headers", f"Origin: {context['origin']}\r\n"]
     if context.get("cookie"):
         cookies = SimpleCookie()
         cookies.load(context["cookie"])
@@ -41,7 +46,7 @@ def download_stream(manager, task, control):
     # FFmpeg's default selection keeps the single best video and audio track. Explicit
     # "-map 0:v -map 0:a" would copy every quality variant of an HLS master playlist.
     # Subtitle and data tracks cannot be stream-copied into MP4, so they are dropped.
-    args += ["-i", task.url, "-sn", "-dn", "-c", "copy", "-movflags", "+faststart", "-f", "mp4", str(part)]
+    args += ["-i", urldefrag(task.url)[0], "-sn", "-dn", "-c", "copy", "-movflags", "+faststart", "-f", "mp4", str(part)]
     with manager.lock:
         task.transport, task.status, task.total = "stream", "Downloading", None
         task.downloaded, task.active_connections = 0, 1

@@ -16,9 +16,11 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
+from urllib.parse import urldefrag
 
 from . import paths
 from .engine import DownloadError, Segment
+from .processes import Helper
 
 INSTALL_HINT = ("Video sites such as YouTube need yt-dlp. Reinstall DOT (it includes yt-dlp), or install it "
                 "with: winget install yt-dlp.yt-dlp")
@@ -27,6 +29,7 @@ SOLVER_HINT = ("Some qualities may be missing because yt-dlp could not solve You
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 DESCRIBE_TIMEOUT = 60
 PROGRESS = "download:DOT %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s"
+DEFAULT_FORMAT = "bv*+ba/b/b*"  # Best video and audio; a silent video when that is all there is.
 _found: dict = {"at": 0.0, "command": None}
 _lock = threading.Lock()
 
@@ -117,6 +120,19 @@ def _error(lines) -> str:
     return _clean(message) or "yt-dlp could not download this video."
 
 
+def browser_args(referer: str, context: dict | None) -> list[str]:
+    """Replay the browser's own request for a stream: its referrer, user agent, Origin and the
+    stream host's cookies. Hosts often refuse anything else. Authorization is never forwarded."""
+    headers = {str(k).lower(): str(v) for k, v in (context or {}).items()}
+    args = ["--referer", referer] if referer else []
+    if headers.get("user-agent"):
+        args += ["--user-agent", headers["user-agent"]]
+    for name in ("origin", "cookie"):
+        if headers.get(name):
+            args += ["--add-header", f"{name.title()}:{headers[name]}"]
+    return args
+
+
 def choices(info: dict) -> list[dict]:
     """Quality options for the window: each with a yt-dlp format selector and a size estimate."""
     formats = info.get("formats") or []
@@ -136,33 +152,57 @@ def choices(info: dict) -> list[dict]:
         if size(best):
             estimate = size(best) + (0 if with_audio or not best_audio else size(best_audio))
         h = height  # Short name keeps the selector readable.
-        options.append({"label": f"{height}p", "audio": False, "size": estimate,
+        kbps = round(best.get("tbr") or 0)
+        # The last alternatives keep silent videos (video-only streams) downloadable.
+        options.append({"label": f"{height}p" + (f" · {kbps} kbps" if kbps else ""), "height": height, "audio": False,
+                        "size": estimate,
                         "format": f"bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/bv*[height<={h}][ext=mp4]+ba[ext=m4a]"
-                                  f"/bv*[height<={h}]+ba/b[height<={h}]/b"})
+                                  f"/bv*[height<={h}]+ba/b[height<={h}]/bv*[height<={h}]/b/b*"})
     if audio:
         options.append({"label": "Audio only (M4A)", "audio": True, "size": size(best_audio) or None, "format": "ba[ext=m4a]/ba"})
     if not options:
-        options.append({"label": "Best available", "audio": False, "size": None, "format": "bv*+ba/b"})
+        options.append({"label": "Best available", "audio": False, "size": None, "format": DEFAULT_FORMAT})
     return options
 
 
-def describe(url: str, timeout: float = DESCRIBE_TIMEOUT) -> dict:
-    """Read a video page with yt-dlp (no download)."""
+def stream_address(url: str) -> str:
+    """A stream's address as servers see it. The "#..." part is never sent, but it hides the
+    ".m3u8" ending from yt-dlp, which then trusts a wrong Content-Type (Dailymotion labels its
+    playlists video/mp4) and saves the playlist text as if it were the video."""
+    return urldefrag(url)[0]
+
+
+def is_playlist(path: Path) -> bool:
+    """A downloaded "video" that is really an HLS or DASH playlist (text)."""
+    with path.open("rb") as stream:
+        head = stream.read(512).lstrip(b"\xef\xbb\xbf \t\r\n")
+    return head.startswith(b"#EXTM3U") or head.startswith(b"<MPD") or (head.startswith(b"<?xml") and b"<MPD" in head)
+
+
+def describe(url: str, timeout: float = DESCRIBE_TIMEOUT, referer: str = "", headers: dict | None = None,
+             stream: bool = False) -> dict:
+    """Read a video page, or a browser stream with the browser's request context (no download)."""
     runner = command()
     if not runner:
         raise DownloadError(INSTALL_HINT)
+    target = stream_address(url) if stream else url
     try:
-        result = subprocess.run(runner + ["-J", "--no-playlist", *js_runtime_args(), "--", url],
-                                capture_output=True, timeout=timeout, creationflags=NO_WINDOW, cwd=Path.home())
-    except subprocess.TimeoutExpired as exc:
-        raise DownloadError("yt-dlp took too long to read this page.") from exc
+        helper = Helper(runner + ["-J", "--no-playlist", *js_runtime_args(), *browser_args(referer, headers), "--", target],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=NO_WINDOW, cwd=Path.home())
     except OSError as exc:
         raise DownloadError(f"Could not start yt-dlp: {exc}") from exc
-    stderr = result.stderr.decode("utf-8", "replace")
-    if result.returncode:
+    try:
+        stdout, stderr = helper.process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        helper.stop()
+        raise DownloadError("yt-dlp took too long to read this page.") from exc
+    finally:
+        helper.close()
+    stderr = stderr.decode("utf-8", "replace")
+    if helper.process.returncode:
         raise DownloadError(_error(stderr.splitlines()))
     try:
-        info = json.loads(result.stdout)
+        info = json.loads(stdout)
     except ValueError as exc:
         raise DownloadError("yt-dlp returned details DOT could not read.") from exc
     if info.get("_type") == "playlist":
@@ -180,14 +220,19 @@ def _number(text: str) -> int | None:
 
 
 def download_site(manager, task, control):
-    """Run yt-dlp into this task's parts folder; the engine then verifies and publishes it."""
+    """Run yt-dlp into this task's parts folder; the engine then verifies and publishes it.
+
+    Used for video pages and for browser streams (HLS/DASH): yt-dlp fetches playlists and
+    segments the way a browser does, while FFmpeg's own HTTP requests are refused by some
+    stream hosts (it sends the Host header late). A stream task replays the browser's
+    request context; a page task gets none (no browser cookies or logins reach yt-dlp)."""
     runner = command()
     if not runner:
         raise DownloadError(INSTALL_HINT)
     folder = manager.store.root / "parts" / task.id
     folder.mkdir(parents=True, exist_ok=True)
     args = runner + ["--no-playlist", "--newline", "--no-color", "--progress", "--progress-template", PROGRESS,
-                     "--print", "after_move:DOTFILE %(filepath)s", "-f", task.site_format or "bv*+ba/b",
+                     "--print", "after_move:DOTFILE %(filepath)s", "-f", task.site_format or DEFAULT_FORMAT,
                      "--merge-output-format", "mp4", "-P", str(folder), "-o", "download.%(ext)s",
                      "--concurrent-fragments", "4", "--socket-timeout", "20", "--retries", "5",
                      "--fragment-retries", "10", *js_runtime_args()]
@@ -195,12 +240,14 @@ def download_site(manager, task, control):
         args += ["--ffmpeg-location", str(Path(ffmpeg).parent)]  # The folder, so ffprobe is found too.
     if manager.rate.limit:
         args += ["--limit-rate", str(manager.rate.limit)]
-    args += ["--", task.url]
+    if task.stream:
+        args += browser_args(task.referer, manager.request_context.get(task.id))
+    args += ["--", stream_address(task.url) if task.stream else task.url]
     with manager.lock:
         # "Connecting" while yt-dlp reads the page (a few seconds); "Downloading" from the first bytes.
         task.transport, task.status, task.active_connections = "site", "Connecting", 1
-    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               creationflags=NO_WINDOW, cwd=folder)
+    helper = Helper(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW, cwd=folder)
+    process = helper.process
     lines, finals = deque(maxlen=20), []
     progress = {"done": 0, "last": 0, "file_total": 0}
 
@@ -239,6 +286,8 @@ def download_site(manager, task, control):
         path = Path(finals[-1]) if finals else next(iter(sorted(folder.glob("download.*"))), None)
         if not path or not path.is_file() or path.suffix == ".part":
             raise DownloadError("yt-dlp finished without producing a file.")
+        if task.stream and is_playlist(path):  # Never report a playlist as the finished video.
+            raise DownloadError("The server sent the stream's playlist instead of the video.")
         size = path.stat().st_size
         os.replace(path, manager._part_path(task, 0))
         with manager.lock:
@@ -248,13 +297,10 @@ def download_site(manager, task, control):
             task.segments = [Segment(0, size, size)]
     finally:
         if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-        reader.join(timeout=2)
-        process.stdout.close()
+            helper.stop()  # Pause, cancel or exit: ends yt-dlp's workers and FFmpeg too.
+        helper.close()
+        reader.join(timeout=5)
+        if not reader.is_alive():  # Closing the pipe under a blocked reader would crash it.
+            process.stdout.close()
         with manager.lock:
             task.active_connections = 0

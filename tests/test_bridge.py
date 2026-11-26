@@ -109,6 +109,21 @@ class BridgeTest(unittest.TestCase):
         state = self.root / "state" / "state.json"
         self.assertFalse(state.exists() and "browser-secret" in state.read_text())
 
+    def test_stream_offer_carries_the_players_origin_and_the_tab_title(self):
+        status, body, _ = self.offer("https://cdn.example/v/master.m3u8", source="media", kind="stream",
+                                     origin="https://player.example", title="A clip\n - Site", userAgent="TestBrowser/1")
+        self.assertEqual((status, body["accepted"]), (202, True))
+        offer = self.bridge.pending.get_nowait()
+        self.bridge.done(offer["id"])  # As DOT's window does when it closes.
+        self.assertTrue(offer["stream"])
+        self.assertEqual(offer["headers"]["Origin"], "https://player.example")
+        self.assertEqual(offer["title"], "A clip  - Site", "control characters removed")
+        for bad in ("https://player.example/path", "javascript:alert(1)", "https://a.example\r\nX: y"):
+            self.assertEqual(self.offer("https://cdn.example/v/master.m3u8", source="media", kind="stream", origin=bad)[0], 202)
+            offer = self.bridge.pending.get_nowait()
+            self.bridge.done(offer["id"])
+            self.assertNotIn("Origin", offer["headers"], bad)
+
     def test_refused_browser_download_stays_in_the_browser(self):
         status, body, _ = self.offer(self.files.url("/error"))
         self.assertEqual((status, body["accepted"]), (409, False))

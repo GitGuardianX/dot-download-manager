@@ -158,11 +158,29 @@
 
   function describe(choice) {
     if (choice.kind === "page") return "This page's video · via yt-dlp (any quality)";
+    if (choice.kind === "stream") {  // DOT lists the stream's qualities, sizes and length next.
+      const type = /\.mpd(?:$|[?#])/i.test(choice.url) ? "DASH" : "HLS";
+      return `Video stream (${type}) · ${streamName(choice.url) || "choose the quality in DOT"}`.slice(0, 120);
+    }
     let name = "";
     try { name = decodeURIComponent(new URL(choice.url).pathname.split("/").pop()); } catch { }
     const kind = choice.kind === "stream" ? "Stream" : choice.kind === "audio" ? "Audio" : "Video";
     const size = choice.size ? ` · ${(choice.size / 1048576).toFixed(1)} MiB` : "";
     return `${kind}${size} · ${name || "media"}`.slice(0, 120);
+  }
+
+  // The telling part of a stream's address, so two streams are told apart: "h264_aac_hq" in
+  // .../h264_aac_hq/1/manifest.m3u8. Generic playlist names and plain numbers are skipped.
+  function streamName(url) {
+    let parts = [];
+    try { parts = new URL(url).pathname.split("/").map(part => decodeURIComponent(part)); } catch { return ""; }
+    const generic = /^(master|manifest|index|playlist|prog_index|chunklist|media|stream)\b[^/]*\.(m3u8|mpd)$/i;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const part = parts[i];
+      if (!part || /^\d+$/.test(part) || (i === parts.length - 1 && generic.test(part))) continue;
+      return part.slice(0, 40);
+    }
+    return "";
   }
 
   function offerChoices(choices) {

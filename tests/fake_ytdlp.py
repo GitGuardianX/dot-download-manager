@@ -5,12 +5,23 @@ URL markers: "unavailable" fails, "nsig" warns about the missing challenge solve
 before the first bytes like a real page read.
 """
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 args = sys.argv[1:]
 url = args[args.index("--") + 1] if "--" in args else args[-1]
+if os.environ.get("DOT_FAKE_ARGS"):  # Lets a test see exactly what DOT passed.
+    Path(os.environ["DOT_FAKE_ARGS"]).write_text(json.dumps(args), encoding="utf-8")
+if "launcher" in url:
+    # Like the real yt-dlp.exe: a launcher whose worker process does the download and inherits
+    # its output. A test reads the worker's process ID from DOT_FAKE_WORKER.
+    import subprocess
+    worker = subprocess.Popen([sys.executable, __file__, *[a.replace("launcher", "worker") for a in args]])
+    if os.environ.get("DOT_FAKE_WORKER"):
+        Path(os.environ["DOT_FAKE_WORKER"]).write_text(str(worker.pid), encoding="utf-8")
+    sys.exit(worker.wait())
 
 if "-J" in args:
     if "unavailable" in url:
@@ -37,6 +48,8 @@ if "unavailable" in url:
     print("ERROR: [youtube] abc123: Video unavailable", flush=True)
     sys.exit(1)
 body = (b"FAKEAUDIO" if ext == "m4a" else b"FAKEVIDEO") * 50000
+if "playlisttext" in url:  # A server that labels its playlist as a video file.
+    body = b"#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:3.0,\n0.m4s\n#EXT-X-ENDLIST\n"
 if "warmup" in url:
     time.sleep(1.5)  # Real yt-dlp reads the page for a few seconds before any bytes arrive.
 partial = folder / f"download.f1.{ext}.part"
@@ -46,7 +59,7 @@ with partial.open("ab") as out:
         out.write(body[position:position + 45000])
         out.flush()
         print(f"DOT {min(position + 45000, len(body))} {len(body)} NA", flush=True)
-        time.sleep(0.25 if "slow" in url else 0)
+        time.sleep(1.0 if "veryslow" in url else 0.25 if "slow" in url else 0)
 final = folder / template.replace("%(ext)s", ext)
 partial.replace(final)
 print(f"DOTFILE {final}", flush=True)
