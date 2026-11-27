@@ -117,6 +117,11 @@ def _error(lines) -> str:
     message = re.sub(r"^ERROR:\s*(\[[^\]]+\]\s*)?([\w-]+:\s*)?", "", message)
     if "Sign in to confirm" in message:
         message += " DOT does not send your account login to yt-dlp."
+    elif re.search(r"authentication is required|login required|requires? (?:a )?log ?in|--cookies", message, re.I):
+        # Reddit and others give yt-dlp the video only when signed in; the player's own stream
+        # needs no login, which is how IDM gets these videos.
+        return ("This site gives yt-dlp the video only when you are signed in, and DOT does not send your "
+                "login to yt-dlp. On DOT's button, choose a \"Video stream\" option for this video instead.")
     return _clean(message) or "yt-dlp could not download this video."
 
 

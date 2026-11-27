@@ -433,15 +433,44 @@ class DownloadManager:
 
     def remove(self, task_id: str):
         """Remove history and temporary parts, preserving the completed output."""
+        self.remove_many([task_id])
+
+    def remove_many(self, task_ids, delete_files: bool = False) -> dict:
+        """Remove downloads from the library in one step, with one save however many there are.
+
+        Unfinished downloads are stopped and their temporary parts deleted. Downloaded files stay
+        on disk unless delete_files is set; then only each completed download's own file is
+        deleted (never a folder, and nothing for unfinished downloads)."""
+        folders, files, removed = [], [], 0
         with self.lock:
-            if task_id in self.controls:
-                self.controls[task_id].remove = True
-                self.pause(task_id)
-            else:
+            for task_id in dict.fromkeys(task_ids):
+                task = self.tasks.get(task_id)
+                if not task:
+                    continue
+                removed += 1
+                if delete_files and task.status == "Completed":
+                    files.append(Path(task.directory) / task.filename)
+                if control := self.controls.get(task_id):  # Running: its worker removes it as it stops.
+                    control.remove = True
+                    control.stop.set()
+                    task.status = "Pausing"
+                    continue
                 self.tasks.pop(task_id, None)
                 self.request_context.pop(task_id, None)
-                shutil.rmtree(self.store.root / "parts" / task_id, ignore_errors=True)
+                folders.append(self.store.root / "parts" / task_id)
+            if removed:
                 self._save()
+        for folder in folders:  # Disk work happens after the library is saved and unlocked.
+            shutil.rmtree(folder, ignore_errors=True)
+        deleted = 0
+        for path in files:
+            try:
+                if path.is_file():
+                    path.unlink()
+                    deleted += 1
+            except OSError:
+                pass  # Open in another program, or already gone: the list entry is removed anyway.
+        return {"removed": removed, "files_deleted": deleted}
 
     def _schedule(self):
         while not self.closing.wait(0.2):

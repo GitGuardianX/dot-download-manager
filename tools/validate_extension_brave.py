@@ -75,6 +75,17 @@ BLOB_VIDEO_PAGE = ('<!doctype html><meta charset="utf-8"><title>Blob video</titl
                    " history.pushState({}, '', '/watch?v=spa123'); });</script>")
 
 
+def shadow_player_page(mode: str) -> str:
+    """A player that keeps its <video> in a shadow root under a controls overlay, like Reddit's
+    <shreddit-player>: the video's "playing" event never reaches the document."""
+    return ('<!doctype html><meta charset="utf-8"><title>Shadow player</title><h1>Shadow player</h1>'
+            f'<{mode}-player id="p" style="display:block;width:640px;height:360px"></{mode}-player><script>'
+            f"customElements.define('{mode}-player', class extends HTMLElement {{ constructor() {{ super();"
+            f" this.attachShadow({{mode: '{mode}'}}).innerHTML = '<div style=\"position:relative;width:640px;height:360px\">"
+            '<video src="/media/sample.mp4" width="640" height="360" autoplay muted loop playsinline></video>'
+            '<div style="position:absolute;inset:0"></div></div>\'; } });</script>')
+
+
 class Fixtures(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     files_served: list[str] = []
@@ -107,6 +118,8 @@ class Fixtures(BaseHTTPRequestHandler):
             self.send(200, VIDEO_PAGE.encode(), "text/html; charset=utf-8")
         elif path == "/blobvideo":
             self.send(200, BLOB_VIDEO_PAGE.encode(), "text/html; charset=utf-8")
+        elif m := re.fullmatch(r"/(open|closed)player", path):
+            self.send(200, shadow_player_page(m.group(1)).encode(), "text/html; charset=utf-8")
         elif path == "/media/sample.mp4":
             self.ranged(SAMPLE, "video/mp4")
         elif m := re.fullmatch(r"/files/([\w-]+\.zip)", path):
@@ -308,6 +321,35 @@ def functional(folder: Path, base: str) -> dict:
             report["page_video"] = {"player_source": "blob:", "sent_to_dot_as": "page for yt-dlp",
                                     "address_after_in_page_navigation": "/watch?v=spa123 (current, not first-loaded)"}
             browser.call("Target.closeTarget", {"targetId": blob_target})
+
+            # 4c. Shadow-root players (Reddit): no button while it just plays; it appears when the
+            # pointer moves onto the player, and sends the video from the open shadow root.
+            visible_button = """(() => {
+                const host = document.querySelector('dot-video-button');
+                if (!host || getComputedStyle(host).display === 'none') return null;
+                const r = host.getBoundingClientRect();
+                return r.width > 20 ? {x: r.left + 40, y: r.top + r.height / 2} : null; })()"""
+            report["shadow_players"] = {}
+            for mode in ("open", "closed"):
+                shadow_target, shadow = browser.open_page(f"{base}/{mode}player")
+                box = wait_for(lambda: browser.evaluate(shadow, """(() => { const p = document.getElementById('p');
+                    const r = p && p.getBoundingClientRect(); return r && r.width > 0 ? {x: r.left + r.width / 2, y: r.top + r.height / 2} : null; })()"""),
+                    f"{mode} shadow player", 15, 0.2)
+                time.sleep(2)  # Playing, but its "playing" event stays inside the shadow root.
+                before = browser.evaluate(shadow, visible_button)
+                assert before is None, f"{mode}: the button appeared without hovering (the test needs a hidden video)"
+                browser.call("Input.dispatchMouseEvent", {"type": "mouseMoved", **box}, shadow)
+                button = wait_for(lambda: browser.evaluate(shadow, visible_button), f"{mode} shadow player button", 10, 0.2)
+                result = {"button_before_hover": False, "button_on_hover": True}
+                if mode == "open":
+                    for kind in ("mousePressed", "mouseReleased"):
+                        browser.call("Input.dispatchMouseEvent", {"type": kind, **button, "button": "left", "clickCount": 1}, shadow)
+                    offer = next_offer(bridge, 15)
+                    assert offer and offer["url"].endswith("/media/sample.mp4"), offer
+                    bridge.done(offer["id"])
+                    result["sent"] = "sample.mp4"
+                report["shadow_players"][mode] = result
+                browser.call("Target.closeTarget", {"targetId": shadow_target})
             report["first_session_job"] = browser.job_snapshot()
 
         # 5. Restart with download history in the profile: nothing is sent at start-up.

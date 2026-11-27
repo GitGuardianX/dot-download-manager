@@ -39,7 +39,7 @@ function world({dot = "up", probeMs = 300, accept = true} = {}) {
     stats.fetch.push({path, at: now});
     assert.equal(new URL(url).hostname, "127.0.0.1", "only loopback may be contacted");
     assert.equal(init.method, "POST");
-    assert.equal(init.headers["X-DOT-Client"], "dot-extension/0.4.2", "the extension reports its version");
+    assert.equal(init.headers["X-DOT-Client"], "dot-extension/0.4.3", "the extension reports its version");
     if (dot === "down") throw new TypeError("Failed to fetch");
     if (dot === "hang") return delay(10 ** 9, init.signal);
     if (path === "/v1/hello") return reply(200, {app: "DOT"});
@@ -56,7 +56,7 @@ function world({dot = "up", probeMs = 300, accept = true} = {}) {
   const forbidden = name => () => { throw new Error(`${name} must never be used`); };
   const chrome = {
     runtime: {id: "dot-test", onInstalled: event("onInstalled"), onMessage: event("onMessage"),
-              getManifest: () => ({version: "0.4.2"}),
+              getManifest: () => ({version: "0.4.3"}),
               sendNativeMessage: forbidden("sendNativeMessage"), connectNative: forbidden("connectNative")},
     storage: {
       local: {get: async defaults => ({...defaults, ...local}), set: async value => { stats.localWrites++; Object.assign(local, value); }},

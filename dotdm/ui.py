@@ -479,6 +479,42 @@ class VideoConfirmation(Dialog):
         super().destroy()
 
 
+class RemoveDialog(Dialog):
+    """Confirm removing downloads from DOT's list: how many, what happens to unfinished ones, and
+    whether the downloaded files are deleted too (only when ticked)."""
+
+    def __init__(self, app, tasks, scope):
+        self.tasks = tasks
+        super().__init__(app, "Remove downloads · DOT", "600x330")
+        count = len(tasks)
+        done = [t for t in tasks if t["status"] == "Completed"]
+        unfinished = count - len(done)
+        self.heading(f"Remove {count:,} download{'' if count == 1 else 's'}", f"{scope} will leave DOT's list.")
+        facts = ([f"{len(done):,} completed"] if done else []) + \
+                ([f"{unfinished:,} unfinished: stopped, and their partial data deleted"] if unfinished else [])
+        label(self.body, "  ·  ".join(facts), wraplength=540, justify="left").pack(anchor="w")
+        self.delete_files = tk.BooleanVar(value=False)
+        on_disk = [t for t in done if (Path(t["directory"]) / t["filename"]).is_file()]
+        if on_disk:
+            files = f"{len(on_disk):,} file{'' if len(on_disk) == 1 else 's'}, {size(sum(t['total'] or 0 for t in on_disk))}"
+            tk.Checkbutton(self.body, text=f"Also delete the downloaded files from disk ({files})", variable=self.delete_files,
+                           bg=SIDE, fg=FG, selectcolor=PANEL, activebackground=SIDE, activeforeground=FG,
+                           font=(FONT, 10), cursor="hand2").pack(anchor="w", pady=(16, 0))
+            label(self.body, "Leave it unticked to keep the files where they are.", color=MUTED, font=(FONT, 9)).pack(anchor="w", padx=(24, 0))
+        actions = tk.Frame(self.body, bg=SIDE)
+        actions.pack(fill="x", side="bottom", pady=(22, 0))
+        button(actions, "Remove", self.confirm, primary=True).pack(side="right")
+        button(actions, "Cancel", self.destroy).pack(side="left")
+        self.bind("<Return>", lambda _: self.confirm())
+        self.finish_layout()
+        self.focus_force()
+
+    def confirm(self):
+        task_ids, delete_files = [t["id"] for t in self.tasks], self.delete_files.get()
+        self.destroy()
+        self.app.remove_tasks(task_ids, delete_files)
+
+
 class SettingsDialog(Dialog):
     def __init__(self, app):
         super().__init__(app, "Settings · DOT", "640x640")
@@ -725,6 +761,7 @@ class Application(tk.Tk):
                 raise SystemExit(1) from exc
         self.manager = manager
         self.last_error = ""
+        self.removing = ""  # Footer status while a bulk removal runs.
         self.bridge = BrowserBridge(self.manager)
         self.filter = "All downloads"
         self.search = tk.StringVar()
@@ -744,6 +781,8 @@ class Application(tk.Tk):
         self.sync_bridge()
         self.bind("<Control-n>", lambda _: self.show_add())
         self.bind("<Control-v>", self.paste_urls)
+        for key in ("<Control-a>", "<Control-A>"):
+            self.bind(key, self.select_all)
         self.tree.bind("<Delete>", lambda _: self.remove_selected())
         self.tree.bind("<space>", lambda _: self.toggle_selected())
         self.protocol("WM_DELETE_WINDOW", self.close_button)
@@ -861,12 +900,14 @@ class Application(tk.Tk):
         button(tools, "Resume", lambda: self.act("resume"), small=True).pack(side="left", padx=(0, 7))
         button(tools, "Pause", lambda: self.act("pause"), small=True).pack(side="left", padx=(0, 7))
         button(tools, "Pause all", self.manager.pause_all, small=True).pack(side="left", padx=(0, 7))
+        self.remove_button = button(tools, "Remove ▾", self.show_remove_menu, small=True)
+        self.remove_button.pack(side="left", padx=(0, 7))
         self.more = tk.Menu(self, tearoff=False, bg=PANEL, fg=FG, activebackground=LINE, activeforeground=FG, font=(FONT, 10))
         self.more.add_command(label="Start all paused downloads", command=self.manager.resume_all)
         self.more.add_command(label="Open download folder", command=self.open_default_folder)
         self.more.add_separator()
-        self.more.add_command(label="Remove selected", command=self.remove_selected)
-        more = button(tools, "•••", lambda: self.more.tk_popup(tools.winfo_rootx() + 200, tools.winfo_rooty() + 35), small=True)
+        self.more.add_command(label="Select all (Ctrl+A)", command=self.select_all)
+        more = button(tools, "•••", lambda: self.more.tk_popup(tools.winfo_rootx() + 300, tools.winfo_rooty() + 35), small=True)
         more.pack(side="left")
         search = entry(tools, self.search, width=22)
         search.pack(side="right", ipady=8)
@@ -1001,7 +1042,8 @@ class Application(tk.Tk):
         warning = self.manager.persistence_error
         problem = ("Couldn't save progress: " + warning) if warning else \
                   ("Something went wrong: " + self.last_error[:160]) if self.last_error else ""
-        self.footer.configure(text=problem or f"{len(tasks)} downloads in your library     ·     {state}", fg=RED if problem else MUTED)
+        self.footer.configure(text=problem or self.removing or f"{len(tasks):,} downloads in your library     ·     {state}",
+                              fg=RED if problem else ACCENT if self.removing else MUTED)
         self.render_details()
 
     def selected(self):
@@ -1065,11 +1107,61 @@ class Application(tk.Tk):
             self.act("pause" if selected[0]["status"] in ACTIVE | {"Queued", "Scheduled"} else "resume")
 
     def remove_selected(self):
-        selected = self.selected()
-        if selected and messagebox.askyesno("Remove downloads", f"Remove {len(selected)} download(s) and their temporary parts?\nCompleted files stay on disk.", parent=self):
-            for task in selected:
-                self.manager.remove(task["id"])
+        self.confirm_remove(self.selected(), "The selected downloads")
+
+    def removal_groups(self):
+        """The Remove menu's choices with their downloads, counted from the whole library."""
+        tasks = self.manager.snapshot()
+        return [("Remove selected", "The selected downloads", self.selected()),
+                ("Remove completed", "Every completed download", [t for t in tasks if t["status"] == "Completed"]),
+                ("Remove failed", "Every failed download", [t for t in tasks if t["status"] == "Failed"]),
+                ("Remove all", "Every download in your library", tasks)]
+
+    def show_remove_menu(self):
+        menu = tk.Menu(self, tearoff=False, bg=PANEL, fg=FG, activebackground=LINE, activeforeground=FG,
+                       disabledforeground=MUTED, font=(FONT, 10))
+        for index, (title, scope, tasks) in enumerate(self.removal_groups()):
+            if index == 3:
+                menu.add_separator()
+            menu.add_command(label=f"{title} ({len(tasks):,})", state="normal" if tasks else "disabled",
+                             command=lambda tasks=tasks, scope=scope: self.confirm_remove(tasks, scope))
+        menu.tk_popup(self.remove_button.winfo_rootx(), self.remove_button.winfo_rooty() + self.remove_button.winfo_height())
+
+    def confirm_remove(self, tasks, scope):
+        if tasks and not self.removing:
+            RemoveDialog(self, tasks, scope)
+
+    def remove_tasks(self, task_ids, delete_files=False):
+        """Remove in the background (thousands of downloads, maybe files too) so the window stays
+        responsive; the list refreshes once at the end."""
+        self.removing = f"Removing {len(task_ids):,} download{'' if len(task_ids) == 1 else 's'}…"
+        outcome = {}
+
+        def work():
+            try:
+                outcome.update(self.manager.remove_many(task_ids, delete_files))
+            except Exception as exc:
+                outcome["error"] = f"{type(exc).__name__}: {exc}"
+
+        worker = threading.Thread(target=work, name="dot-remove", daemon=True)
+        worker.start()
+
+        def finish():
+            if worker.is_alive():
+                self.after(100, finish)
+                return
+            self.removing = ""
+            self.last_error = outcome.get("error", self.last_error)
             self.refresh()
+        self.after(100, finish)
+        self.refresh()
+        return worker
+
+    def select_all(self, _event=None):
+        if isinstance(self.focus_get(), (tk.Entry, ttk.Entry)):
+            return None  # Ctrl+A in a text box selects its text, as usual.
+        self.tree.selection_set(self.tree.get_children())
+        return "break"
 
     def context_menu(self, event):
         row = self.tree.identify_row(event.y)

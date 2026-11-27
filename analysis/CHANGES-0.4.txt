@@ -87,3 +87,40 @@ Fixes
 
 Validation: a local host mimicking Dailymotion (video/mp4 label, #cell=cf3) saves a playable
 MP4 (fails on 0.4.1); the reported stream downloads as H.264 848x480 + AAC, 23.6 s.
+
+DOT 0.4.3: NO BUTTON ON REDDIT VIDEOS
+
+Report: Reddit videos showed no "Download with DOT" button, while IDM offered every quality.
+
+Cause: Reddit's <shreddit-player> keeps its <video> inside a shadow root. A video's
+"playing" event does not leave a shadow root, and the one start-up look only sees the
+page's own <video> elements, so DOT never noticed the video.
+
+Fixes
+  - The button also appears when the pointer moves onto a player whose video sits in a
+    shadow root (found along the pointer event's own path; nothing is scanned). A player
+    with a closed shadow root gets the button on the player element itself.
+  - yt-dlp now needs a signed-in account to read Reddit posts ("Account authentication is
+    required"); DOT never sends logins to yt-dlp, so its message now says to choose the
+    "Video stream" option, which needs no login (as IDM uses).
+
+Validation: capped Brave with open and closed shadow-root players behind a controls overlay:
+no button while playing, button on hover, the open player's video sent to DOT.
+
+DOT 0.4.4: CLEARING THE DOWNLOAD LIST
+
+Request: with thousands of downloads, clearing everything (unfinished ones too) was hard: rows
+had to be selected by hand, and each removal saved the whole list again.
+
+Changes
+  - Remove menu in the toolbar: selected, completed, failed or all downloads, with counts.
+  - One confirmation window: what is removed, unfinished downloads stopped with their partial
+    data deleted, and an unticked "Also delete the downloaded files from disk" (only each
+    completed download's own file is deleted, never a folder).
+  - Bulk removal in the engine (remove_many): one save however many downloads, disk clean-up
+    after the list is saved, run in the background so the window stays responsive.
+  - Ctrl+A selects every row in the current view; Delete opens the same confirmation.
+  - The browser extension is unchanged (still 0.4.3).
+
+Validation: 3,000 downloads removed with one save in moments; files kept unless ticked; a
+running download stopped and removed; the window's Remove-all flow end to end.

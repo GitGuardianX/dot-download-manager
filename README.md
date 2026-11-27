@@ -8,7 +8,7 @@ video downloads from YouTube and many other sites.
 
 ## Download
 
-Get **DOT-Setup-0.4.2.exe** from the [latest release](https://github.com/GitGuardianX/dot-download-manager/releases/latest)
+Get **DOT-Setup-0.4.4.exe** from the [latest release](https://github.com/GitGuardianX/dot-download-manager/releases/latest)
 (Windows 10/11, 64-bit).
 
 - It installs for your Windows account only, with no admin prompt, into `%LOCALAPPDATA%\Programs\DOT`.
@@ -34,6 +34,8 @@ Get **DOT-Setup-0.4.2.exe** from the [latest release](https://github.com/GitGuar
 - **Right-click** any link or video: **Download with DOT**.
 - **Lives in the tray** like IDM: closing the window keeps DOT running, and it can start with Windows.
 - **Organized:** downloads are sorted into Video, Music, Archives, Documents, Programs and Images folders.
+- **Easy to clear:** remove the selected, completed, failed or all downloads in one step, even thousands;
+  downloaded files stay on disk unless you choose to delete them too.
 
 | Choosing a video quality | Settings |
 |---|---|

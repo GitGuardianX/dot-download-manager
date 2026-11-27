@@ -24,6 +24,11 @@ if "launcher" in url:
     sys.exit(worker.wait())
 
 if "-J" in args:
+    if "needlogin" in url:  # What yt-dlp says for Reddit posts now.
+        print("ERROR: [Reddit] abc123: Account authentication is required. Use --cookies-from-browser or --cookies "
+              "for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ  for how to manually pass cookies",
+              file=sys.stderr)
+        sys.exit(1)
     if "unavailable" in url:
         print("ERROR: [youtube] abc123: Video unavailable", file=sys.stderr)
         sys.exit(1)

@@ -1,4 +1,4 @@
-DOT DOWNLOAD MANAGER 0.4.2
+DOT DOWNLOAD MANAGER 0.4.4
 
 A download manager for Windows in the spirit of IDM: parallel byte-range transfers,
 pause/resume, queues, scheduling, a speed limit, SHA-256 checks, video downloads from
@@ -8,7 +8,7 @@ YouTube and many other sites, and a browser extension that sends downloads to DO
 INSTALL
 -------------------------------------------------------------------------------
 
-Run DOT-Setup-0.4.2.exe. By default it installs for your Windows account only, with no
+Run DOT-Setup-0.4.4.exe. By default it installs for your Windows account only, with no
 admin prompt, to %LOCALAPPDATA%\Programs\DOT (the wizard also offers "all users").
 Options: a desktop shortcut, and "Start DOT in the tray when I sign in to Windows"
 (recommended: browser downloads only reach DOT while it is running).
@@ -66,7 +66,11 @@ Select rows to pause/resume; double-click opens the folder; right-click copies t
 SHA-256, retries, or removes. Settings: default folder, 1-16 connections per file, 1-6
 simultaneous downloads, a speed limit (0 = unlimited), and "Update yt-dlp" (sites change
 often; update when a video site stops working).
-Keys: Ctrl+N new download, Ctrl+V paste links, Space pause/resume, Delete remove.
+Clearing the list: Remove (toolbar) removes the selected, completed, failed or all downloads
+in one step, however many there are. Unfinished ones are stopped and their partial data
+deleted; downloaded files stay on disk unless you tick "Also delete the downloaded files".
+Keys: Ctrl+N new download, Ctrl+V paste links, Ctrl+A select all, Space pause/resume,
+Delete remove the selected downloads.
 
 Limits: DRM-protected video (Netflix, Prime Video, Disney+, Spotify) cannot be downloaded
 by DOT, IDM, or any legitimate tool. Private, members-only or age-restricted videos fail

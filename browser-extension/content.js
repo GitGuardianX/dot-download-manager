@@ -1,7 +1,8 @@
 // DOT video button (content script, runs in every frame).
 //
 // Event-driven by design: nothing happens in a frame until one of its videos starts
-// playing. There is no MutationObserver, no timer loop and no page scanning. At most
+// playing, or the pointer moves onto a player whose video sits in a shadow root. There is
+// no MutationObserver, no timer loop and no page scanning. At most
 // one button exists per frame, and its scroll/resize listeners are attached only while
 // it is showing. Checked by tests/test_extension.py.
 (() => {
@@ -37,6 +38,34 @@
     const target = event.target;
     if (enabled && target instanceof HTMLVideoElement && target !== video && !dismissed.has(target) && large(target)) show(target);
   }, {capture: true, passive: true});
+
+  // Players that keep their <video> inside a shadow root (Reddit's <shreddit-player>) never
+  // let "playing" reach the document. The pointer's own event path does cross into shadow
+  // roots, so such a player is found when the pointer moves onto it: one short look along
+  // that path, as IDM's button appears on hover. Nothing is scanned.
+  document.addEventListener("pointerover", event => {
+    if (!enabled) return;
+    const target = playerUnder(event.composedPath());
+    if (target && target !== video && !dismissed.has(target) && large(target)) show(target);
+  }, {capture: true, passive: true});
+
+  // A video inside a shadow root on the pointer's path, else a player element whose closed
+  // shadow root hides its video (the button then points at the player itself). Videos in the
+  // page itself are left to the "playing" listener above.
+  function playerUnder(path) {
+    for (let i = 0; i < path.length && i < 32; i++) {
+      const element = path[i];
+      if (element === host) return null;  // The pointer is on DOT's own button.
+      if (!(element instanceof Element)) continue;
+      if (element instanceof HTMLVideoElement) return element.getRootNode() instanceof ShadowRoot ? element : null;
+      const inner = element.shadowRoot?.querySelector("video");
+      if (inner) return inner;
+      if (element.localName.includes("-") && element.localName.includes("player") && !element.querySelector("video")) {
+        return element;
+      }
+    }
+    return null;
+  }
 
   // A video may already be playing when this script arrives (it loads at document_idle).
   // This single look is bounded and happens once per frame.

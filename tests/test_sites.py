@@ -124,6 +124,13 @@ class SitesTest(unittest.TestCase):
         with self.assertRaisesRegex(DownloadError, "playlist"):
             sites.describe(PAGE + "&playlist")
 
+    def test_sign_in_only_sites_point_to_the_stream_option(self):
+        with self.assertRaises(DownloadError) as caught:
+            sites.describe("https://www.reddit.com/r/x/comments/abc123/?needlogin")
+        message = str(caught.exception)
+        self.assertIn('choose a "Video stream" option', message)
+        self.assertNotIn("--cookies", message, "no command-line advice for a desktop app user")
+
     def test_video_page_downloads_and_publishes(self):
         task_id = self.manager.add(PAGE, filename="Clip.mp4", site=True, site_format="bv*+ba/b")
         task = self.wait(task_id, lambda t: t["status"] in ("Completed", "Failed"))

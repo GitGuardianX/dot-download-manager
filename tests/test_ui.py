@@ -144,6 +144,36 @@ class UiTest(unittest.TestCase):
         self.assertEqual((task["stream"], task["site_format"], task["referer"]),
                          (True, info["choices"][0]["format"], offer["referer"]))
 
+    def test_clearing_the_whole_list(self):
+        from dotdm.ui import RemoveDialog
+        manager = self.app.manager
+        for i in range(5):
+            manager.add(f"https://example.com/partial-{i}.zip", paused=True)
+        finished = manager.add("https://example.com/done.zip", filename="done.zip", paused=True)
+        task = manager.tasks[finished]
+        output = Path(task.directory) / task.filename
+        output.write_bytes(b"finished file")
+        task.status, task.total = "Completed", 13
+        self.app.refresh()
+        self.app.tree.focus_set()
+        self.assertEqual(self.app.select_all(), "break")
+        self.assertEqual(len(self.app.tree.selection()), 6, "Ctrl+A selects every row")
+        counts = {title: len(tasks) for title, _, tasks in self.app.removal_groups()}
+        self.assertEqual(counts, {"Remove selected": 6, "Remove completed": 1, "Remove failed": 0, "Remove all": 6})
+        dialog = RemoveDialog(self.app, manager.snapshot(), "Every download in your library")
+        self.app.update()
+        self.assertFalse(dialog.delete_files.get(), "downloaded files are kept unless ticked")
+        dialog.delete_files.set(True)
+        dialog.confirm()
+        end = time.monotonic() + 10
+        while self.app.removing and time.monotonic() < end:
+            self.app.update()
+            time.sleep(0.05)
+        self.assertEqual(manager.snapshot(), [])
+        self.assertEqual(self.app.tree.get_children(), ())
+        self.assertFalse(output.exists(), "the ticked option deleted the finished file")
+        self.assertIn("0 downloads in your library", self.app.footer.cget("text"))
+
     def test_close_button_exits_when_the_tray_is_off(self):
         self.app.tray = FakeTray()
         self.app.manager.configure(keep_in_tray=False)
