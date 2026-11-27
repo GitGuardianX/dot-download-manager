@@ -124,3 +124,28 @@ Changes
 
 Validation: 3,000 downloads removed with one save in moments; files kept unless ticked; a
 running download stopped and removed; the window's Remove-all flow end to end.
+
+DOT 0.4.5: FILE HOSTS THAT IDM DOWNLOADED BUT DOT DECLINED
+
+Report: on real-debrid, clicking DOWNLOAD opened IDM's window; with IDM's Brave extension
+off, Brave asked where to save and DOT never appeared.
+
+Causes
+  - IDM's Brave extension takes downloads before DOT's extension sees them (documented; the
+    user turned it off).
+  - DOT checks a browser download with a one-byte request (Range: bytes=0-0). real-debrid
+    labels its reply "bytes 0-0/N" but sends the whole file, so DOT judged the server unable
+    to do ranges and declined; the browser kept the file. Normal ranges work on that server.
+  - The server sends no ETag or Last-Modified, so DOT also refused parallel pieces and
+    resume (a paused 2.7 GB download would have restarted from zero).
+
+Fixes
+  - A mislabelled one-byte reply is re-checked with an ordinary 1 KiB range; parallel pieces
+    if exact, else one connection. Never a declined download for this.
+  - When a server names no version at all, the file's exact size identifies it (as in IDM):
+    every piece and every resume must report the same total, and this identity is never
+    sent as If-Range. Weak ETags and very recent Last-Modified dates stay single-stream.
+
+Validation: local servers mimicking real-debrid (mislabelled probe, no version; parallel,
+pause and resume inside pieces); the reported link accepted by DOT's browser check
+(2.68 GiB) and downloaded with 8 connections over 32 pieces, resuming after a pause.

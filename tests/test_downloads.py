@@ -73,8 +73,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Range", "bytes */0")
             self.end_headers()
             return
+        if self.path in ("/lazy-range", "/lazy-no-range", "/rd") and request_range == "bytes=0-0":
+            # Like real-debrid: the reply is labelled "bytes 0-0/N" but the whole file follows.
+            self.send_response(206)
+            if self.path != "/rd":  # real-debrid names no version (no ETag, no Last-Modified).
+                self.send_header("ETag", tag)
+            self.send_header("Content-Range", f"bytes 0-0/{len(data)}")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            return
         start, end = 0, len(data) - 1
-        range_allowed = self.path not in ("/no-range", "/unknown")
+        range_allowed = self.path not in ("/no-range", "/unknown", "/lazy-no-range")
         if self.path == "/bad-range" and request_range != "bytes=0-0":
             range_allowed = False
         if self.headers.get("If-Range") and self.headers["If-Range"] != tag:
@@ -86,10 +99,10 @@ class Handler(BaseHTTPRequestHandler):
             end = min(end, len(data) - 1)
         selected = data[start:end + 1]
         self.send_response(206 if ranged else 200)
-        if self.path != "/weak":
-            self.send_header("ETag", tag)
-        else:
+        if self.path == "/weak":
             self.send_header("ETag", 'W/"weak"')
+        elif self.path != "/rd":
+            self.send_header("ETag", tag)
         if self.path == "/encoded":
             self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Disposition", "attachment; filename*=UTF-8''test%20payload.bin")
@@ -112,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
             for pos in range(0, len(selected), 16384):
                 self.wfile.write(selected[pos:pos + 16384])
                 self.wfile.flush()
-                if self.path in ("/slow", "/weak") and len(selected) > 1:
+                if self.path in ("/slow", "/weak", "/rd") and len(selected) > 1:
                     time.sleep(0.008)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
@@ -201,6 +214,32 @@ class DownloadsTest(unittest.TestCase):
         task = self.complete(self.manager.add(self.server.url("/no-range")))
         self.assertFalse(task["range_supported"])
         self.assertEqual(len(task["segments"]), 1)
+
+    def test_mislabelled_one_byte_probe_still_downloads_in_parallel(self):
+        # real-debrid: "bytes=0-0" gets the whole file labelled as one byte; real ranges work.
+        task = self.complete(self.manager.add(self.server.url("/lazy-range")))
+        self.assertTrue(task["range_supported"])
+        self.assertGreater(len(task["segments"]), 1, "parallel pieces, as with any range server")
+
+    def test_mislabelled_probe_without_real_ranges_uses_one_connection(self):
+        task = self.complete(self.manager.add(self.server.url("/lazy-no-range")))
+        self.assertFalse(task["range_supported"])
+        self.assertEqual(len(task["segments"]), 1)
+
+    def test_server_naming_no_version_downloads_in_parallel_and_resumes(self):
+        # real-debrid: no ETag or Last-Modified, and a mislabelled one-byte probe.
+        task_id = self.manager.add(self.server.url("/rd"))
+        self.wait(task_id, lambda t: 65536 < t["downloaded"] < len(BODY))
+        self.manager.pause(task_id)
+        paused = self.wait(task_id, lambda t: t["status"] == "Paused")
+        self.assertEqual(paused["validator"], f"size:{len(BODY)}", "the exact size identifies the file")
+        self.assertGreater(len(paused["segments"]), 1, "parallel pieces")
+        self.server.requests.clear()
+        self.manager.resume(task_id)
+        self.complete(task_id)
+        starts = [int(re.match(r"bytes=(\d+)-", r).group(1)) for _, r, _ in self.server.requests if r and r != "bytes=0-0"]
+        self.assertTrue(any(start % (256 * 1024) != 0 for start in starts), "resumed inside pieces, not from the start")
+        self.assertFalse(any(validator for _, _, validator in self.server.requests), "the size identity is never sent as If-Range")
 
     def test_lying_range_server_falls_back(self):
         task = self.complete(self.manager.add(self.server.url("/bad-range")))

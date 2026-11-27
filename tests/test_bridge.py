@@ -109,6 +109,14 @@ class BridgeTest(unittest.TestCase):
         state = self.root / "state" / "state.json"
         self.assertFalse(state.exists() and "browser-secret" in state.read_text())
 
+    def test_browser_download_from_a_server_mislabelling_the_probe_is_taken(self):
+        # The real-debrid case: DOT used to decline, so the browser kept the file.
+        status, body, _ = self.offer(self.files.url("/lazy-range"))
+        self.assertEqual((status, body["accepted"]), (202, True), body)
+        offer = self.bridge.pending.get_nowait()
+        self.bridge.done(offer["id"])
+        self.assertEqual(offer["total"], len(BODY))
+
     def test_stream_offer_carries_the_players_origin_and_the_tab_title(self):
         status, body, _ = self.offer("https://cdn.example/v/master.m3u8", source="media", kind="stream",
                                      origin="https://player.example", title="A clip\n - Site", userAgent="TestBrowser/1")

@@ -8,7 +8,7 @@ video downloads from YouTube and many other sites.
 
 ## Download
 
-Get **DOT-Setup-0.4.4.exe** from the [latest release](https://github.com/GitGuardianX/dot-download-manager/releases/latest)
+Get **DOT-Setup-0.4.5.exe** from the [latest release](https://github.com/GitGuardianX/dot-download-manager/releases/latest)
 (Windows 10/11, 64-bit).
 
 - It installs for your Windows account only, with no admin prompt, into `%LOCALAPPDATA%\Programs\DOT`.

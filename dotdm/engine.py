@@ -1,7 +1,8 @@
 """Concurrent range downloads with persistent, validated partial files.
 
 Only the Python standard library is needed at runtime. The transport deliberately
-requires a strong validator before combining independent HTTP responses.
+requires a strong validator before combining independent HTTP responses; a server that
+names no version at all is identified by the file's exact size instead, as IDM does.
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ ACTIVE = {"Connecting", "Downloading", "Verifying", "Pausing"}
 CHUNK = 64 * 1024
 TIMEOUT = 8
 PROGRESS_SAVE_SECONDS = 2
+SIZE_IDENTITY = "size:"  # Validator prefix when the file's exact size is its only identity.
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36"
 # Statuses written by earlier versions that no longer exist; they are restored as Paused.
 RETIRED_STATUSES = {"Waiting for browser"}
@@ -574,15 +576,42 @@ class DownloadManager:
             ranged = response.status == 206
             if ranged:
                 start, end, total = self._content_range(response.headers.get("Content-Range", ""))
-                if (start, end) != (0, 0) or len(response.read(2)) != 1:
+                if start != 0:
                     raise RangeUnsupported("Server did not return the requested one-byte probe.")
+                if end != 0 or len(response.read(2)) != 1:
+                    # Some servers mishandle "bytes=0-0" (real-debrid labels the reply "bytes 0-0/N"
+                    # and sends the whole file). An ordinary small range decides instead; piece
+                    # downloads are checked strictly either way.
+                    ranged = self._confirm_ranges(task, total, timeout)
             else:
                 total = self._length(response.headers)
                 if response.status != 200:
                     raise DownloadError(f"Unexpected HTTP status {response.status}.")
+            validator = self._validator(response.headers)
+            if not validator and ranged and total and not response.headers.get("ETag") \
+                    and not response.headers.get("Last-Modified"):
+                # The server names no version at all (real-debrid). As in IDM, the exact size then
+                # identifies the file: every piece and every resume must report that same total.
+                # Weak or very recent versions stay single-stream; they say the bytes may differ.
+                validator = f"{SIZE_IDENTITY}{total}"
             return Metadata(total, ranged, response.headers.get("ETag", ""),
-                            response.headers.get("Last-Modified", ""), self._validator(response.headers),
+                            response.headers.get("Last-Modified", ""), validator,
                             disposition_filename(response.headers.get("Content-Disposition", "")))
+
+    def _confirm_ranges(self, task: Task, total: int, timeout: float | None) -> bool:
+        """An ordinary 1 KiB range request: True only if the server returns exactly those bytes.
+        False means one connection, never a refused download."""
+        last = max(0, min(1023, total - 1))
+        try:
+            with self._open(task, {"Range": f"bytes=0-{last}"}, timeout) as response:
+                if response.status != 206:
+                    return False
+                if self._content_range(response.headers.get("Content-Range", "")) != (0, last, total):
+                    return False
+                length = self._length(response.headers)
+                return length in (None, last + 1) and len(response.read(last + 2)) == last + 1
+        except (urllib.error.URLError, OSError, http.client.HTTPException, DownloadError):
+            return False
 
     @staticmethod
     def _check_content(task: Task, headers):
@@ -680,7 +709,10 @@ class DownloadManager:
             control.check()
             start = segment.start + segment.downloaded
             try:
-                with self._open(task, {"Range": f"bytes={start}-{segment.end - 1}", "If-Range": task.validator}) as response:
+                headers = {"Range": f"bytes={start}-{segment.end - 1}"}
+                if not task.validator.startswith(SIZE_IDENTITY):  # Only a real HTTP validator goes to the server.
+                    headers["If-Range"] = task.validator
+                with self._open(task, headers) as response:
                     self._encoding(response.headers)
                     if response.status == 200:
                         raise RangeUnsupported("Server ignored a byte range or the file changed; restarting as one stream.")
