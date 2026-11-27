@@ -307,6 +307,11 @@ class DownloadConfirmation(Dialog):
         super().destroy()
 
 
+def heightof(quality: str) -> int:
+    """1080 for "1080p"; 0 when the text names no height."""
+    return int(quality[:-1]) if quality[:-1].isdigit() and quality.endswith("p") else 0
+
+
 def duration_text(seconds) -> str:
     seconds = int(seconds or 0)
     hours, rest = divmod(seconds, 3600)
@@ -408,6 +413,10 @@ class VideoConfirmation(Dialog):
             # A playlist's own name ("master") says nothing: the tab's title names the video, as in IDM.
             value = {**value, "title": self.offer.get("title") or value["title"], "site": "Stream"}
         self.info, self.options = value, value["choices"]
+        if self.stream and self.offer.get("quality") and [o["label"] for o in self.options] == ["Best available"]:
+            # One rendition picked in the page's menu ("1080p HD · HLS stream"): its playlist does not
+            # state the resolution, but the menu knew it.
+            self.options = [{**self.options[0], "label": self.offer["quality"], "height": heightof(self.offer["quality"])}]
         details = [value["title"]] + ([duration_text(value["duration"])] if value["duration"] else []) + ([value["site"]] if value["site"] else [])
         self.title_label.configure(text="  ·  ".join(details), fg=FG)
         self.combo.configure(values=[option["label"] + (f"  ·  ~{size(option['size'])}" if option["size"] else "")

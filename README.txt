@@ -1,4 +1,4 @@
-DOT DOWNLOAD MANAGER 0.4.5
+DOT DOWNLOAD MANAGER 0.4.7
 
 A download manager for Windows in the spirit of IDM: parallel byte-range transfers,
 pause/resume, queues, scheduling, a speed limit, SHA-256 checks, video downloads from
@@ -8,7 +8,7 @@ YouTube and many other sites, and a browser extension that sends downloads to DO
 INSTALL
 -------------------------------------------------------------------------------
 
-Run DOT-Setup-0.4.5.exe. By default it installs for your Windows account only, with no
+Run DOT-Setup-0.4.7.exe. By default it installs for your Windows account only, with no
 admin prompt, to %LOCALAPPDATA%\Programs\DOT (the wizard also offers "all users").
 Options: a desktop shortcut, and "Start DOT in the tray when I sign in to Windows"
 (recommended: browser downloads only reach DOT while it is running).

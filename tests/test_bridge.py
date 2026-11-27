@@ -117,6 +117,23 @@ class BridgeTest(unittest.TestCase):
         self.bridge.done(offer["id"])
         self.assertEqual(offer["total"], len(BODY))
 
+    def test_video_button_files_are_named_after_the_video(self):
+        status, body, _ = self.offer(self.files.url("/range"), source="media", kind="video",
+                                     title="A post: the clip?", quality="478p")
+        self.assertEqual((status, body["accepted"]), (202, True), body)
+        offer = self.bridge.pending.get_nowait()
+        self.bridge.done(offer["id"])
+        self.assertEqual(offer["filename"], "A post_ the clip_ (478p).bin", "title + quality, the file's own extension")
+        self.offer(self.files.url("/range"), title="Some tab")  # An ordinary browser download.
+        offer = self.bridge.pending.get_nowait()
+        self.bridge.done(offer["id"])
+        self.assertEqual(offer["filename"], "test payload.bin", "browser downloads keep the server's name")
+        # Reddit's MP4 files carry "?m=DASHPlaylist.mpd": still a file, not a stream.
+        self.offer(self.files.url("/range") + "?m=DASHPlaylist.mpd", source="media", kind="video")
+        offer = self.bridge.pending.get_nowait()
+        self.bridge.done(offer["id"])
+        self.assertFalse(offer["stream"])
+
     def test_stream_offer_carries_the_players_origin_and_the_tab_title(self):
         status, body, _ = self.offer("https://cdn.example/v/master.m3u8", source="media", kind="stream",
                                      origin="https://player.example", title="A clip\n - Site", userAgent="TestBrowser/1")

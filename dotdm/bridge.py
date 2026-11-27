@@ -23,6 +23,7 @@ import time
 import uuid
 import queue
 import urllib.error
+from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -145,11 +146,13 @@ class BrowserBridge:
         if re.fullmatch(r"https?://[A-Za-z0-9.-]+(?::\d{1,5})?", origin := str(data.get("origin") or "")[:300]):
             context["Origin"] = origin
         context = request_headers(context)
-        title = re.sub(r"[\x00-\x1f\x7f]+", " ", str(data.get("title") or ""))[:200].strip()  # The tab's title.
+        title = re.sub(r"[\x00-\x1f\x7f]+", " ", str(data.get("title") or ""))[:200].strip()  # The video's or tab's title.
+        quality = re.sub(r"[^\w .-]", "", str(data.get("quality") or ""))[:20].strip()  # "478p", "audio".
         mime = str(data.get("mime") or "")[:200]
         size = data.get("size") if type(data.get("size")) is int and data["size"] >= 0 else None
         filename = safe_filename(str(data.get("filename") or "")[:255] or url_filename(url))
-        stream = bool(re.search(r"\.(m3u8|mpd)(?:$|[?#])", url, re.I) or re.search(r"mpegurl|dash\+xml", mime, re.I)
+        # The path decides, not the query: Reddit's MP4 files carry "?m=DASHPlaylist.mpd".
+        stream = bool(re.search(r"\.(m3u8|mpd)$", urlsplit(url).path, re.I) or re.search(r"mpegurl|dash\+xml", mime, re.I)
                       or data.get("kind") == "stream")
         site = source == "page"
         if site:
@@ -176,10 +179,15 @@ class BrowserBridge:
                     # The browser already has this download in hand; let it continue.
                     return 409, {"accepted": False, "reason": reason}
                 warning = reason
+            if source == "media" and title:
+                # A video button's file is named after the video, as in IDM: "Post title (478p).mp4"
+                # rather than the address's "m2-res_478p.mp4". Browser downloads keep the server's name.
+                suffix = Path(filename).suffix or (".m4a" if mime.startswith("audio/") else ".mp4")
+                filename = safe_filename((f"{title} ({quality})" if quality and quality != "audio" else title)[:180] + suffix)
         offer_id = uuid.uuid4().hex
         offer = {"id": offer_id, "url": url, "referer": referrer, "headers": context, "filename": filename,
                  "total": size, "mime": mime, "stream": stream, "site": site, "source": source, "warning": warning,
-                 "title": title, "probed": True}
+                 "title": title, "quality": quality, "probed": True}
         with self.lock:
             if len(self.open_offers) >= MAX_PENDING:
                 return 429, {"accepted": False, "reason": "DOT already has download windows open. The browser kept this download."}

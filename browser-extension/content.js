@@ -185,34 +185,49 @@
     }, 5000);
   }
 
+  // Labels come from the extension's worker ("1920p HD · MP4 · 12.3 MiB"), as in IDM's menu.
   function describe(choice) {
-    if (choice.kind === "page") return "This page's video · via yt-dlp (any quality)";
-    if (choice.kind === "stream") {  // DOT lists the stream's qualities, sizes and length next.
-      const type = /\.mpd(?:$|[?#])/i.test(choice.url) ? "DASH" : "HLS";
-      return `Video stream (${type}) · ${streamName(choice.url) || "choose the quality in DOT"}`.slice(0, 120);
-    }
-    let name = "";
-    try { name = decodeURIComponent(new URL(choice.url).pathname.split("/").pop()); } catch { }
-    const kind = choice.kind === "stream" ? "Stream" : choice.kind === "audio" ? "Audio" : "Video";
-    const size = choice.size ? ` · ${(choice.size / 1048576).toFixed(1)} MiB` : "";
-    return `${kind}${size} · ${name || "media"}`.slice(0, 120);
+    return String(choice.label || (choice.kind === "page" ? "This page's video · via yt-dlp (any quality)" : "Video")).slice(0, 120);
   }
 
-  // The telling part of a stream's address, so two streams are told apart: "h264_aac_hq" in
-  // .../h264_aac_hq/1/manifest.m3u8. Generic playlist names and plain numbers are skipped.
-  function streamName(url) {
-    let parts = [];
-    try { parts = new URL(url).pathname.split("/").map(part => decodeURIComponent(part)); } catch { return ""; }
-    const generic = /^(master|manifest|index|playlist|prog_index|chunklist|media|stream)\b[^/]*\.(m3u8|mpd)$/i;
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const part = parts[i];
-      if (!part || /^\d+$/.test(part) || (i === parts.length - 1 && generic.test(part))) continue;
-      return part.slice(0, 40);
-    }
-    return "";
+  // Words that name a player, not a video: "Dailymotion Video Player", "JW Player", "Play".
+  const GENERIC_TITLE = /^(video|media|play|pause|embedded video|watch|loading)$|^(?:\S+\s){0,3}(?:video\s+|media\s+)?player$/i;
+  function cleanTitle(text) {
+    const value = String(text || "").replace(/\s+/g, " ").trim().slice(0, 150);
+    return value.length >= 3 && !GENERIC_TITLE.test(value) ? value : "";
   }
 
-  function offerChoices(choices) {
+  // What identifies the clicked video, read from the video and up to 16 of its ancestors
+  // (crossing shadow roots; nothing is scanned): a title, such as Reddit's post-title on the
+  // video's post or an embedded player page's own title, which names the file; and the
+  // addresses the player itself names, so DOT lists only this video's files.
+  function videoContext(target) {
+    const hints = [];
+    let title = "";
+    const hint = value => {
+      if (typeof value === "string" && /^https?:\/\//i.test(value) && !hints.includes(value) && hints.length < 8) {
+        hints.push(value.slice(0, 2048));
+      }
+    };
+    let element = target;
+    for (let depth = 0; element && depth < 16; depth++) {
+      if (element instanceof Element) {
+        hint(element.getAttribute("src"));
+        hint(element.getAttribute("data-src"));
+        if (element instanceof HTMLMediaElement) {
+          hint(element.currentSrc);
+          for (const child of element.children) if (child.localName === "source") hint(child.src);
+        }
+        title ||= cleanTitle(element.getAttribute("post-title") || element.getAttribute("data-title") ||
+                             element.getAttribute("aria-label") || element.getAttribute("title"));
+      }
+      element = element instanceof ShadowRoot ? element.host : element.parentNode;
+    }
+    if (!title && window !== window.top) title = cleanTitle(document.title);
+    return {title, hints};
+  }
+
+  function offerChoices(choices, context) {
     menu.replaceChildren(...choices.slice(0, 8).map(choice => {
       const button = node("button", "", describe(choice));
       button.type = "button";
@@ -221,7 +236,10 @@
         if (!event.isTrusted) return;
         menu.hidden = true;
         let reply = null;
-        try { reply = await chrome.runtime.sendMessage({type: "send", url: choice.url, kind: choice.kind, mime: choice.mime}); } catch { }
+        try {
+          reply = await chrome.runtime.sendMessage({type: "send", url: choice.url, kind: choice.kind, mime: choice.mime,
+                                                    title: context.title, quality: choice.quality || ""});
+        } catch { }
         say(reply?.ok ? "Sent to DOT ✓" : (reply?.error || "Couldn't reach DOT."), !reply?.ok);
       });
       return button;
@@ -235,10 +253,12 @@
     mainButton.textContent = "Sending to DOT…";
     try {
       // location.href is the current address; single-page sites (YouTube) change it without reloading.
-      const reply = await chrome.runtime.sendMessage({type: "video", src: video.currentSrc || video.src || "", page: location.href});
+      const context = videoContext(video);
+      const reply = await chrome.runtime.sendMessage({type: "video", src: video.currentSrc || video.src || "", page: location.href,
+                                                      title: context.title, hints: context.hints});
       if (reply?.choices?.length) {
         mainButton.textContent = LABEL;
-        offerChoices(reply.choices);
+        offerChoices(reply.choices, context);
       } else {
         say(reply?.ok ? "Sent to DOT ✓" : (reply?.error || "Couldn't reach DOT."), !reply?.ok);
       }

@@ -75,11 +75,19 @@ BLOB_VIDEO_PAGE = ('<!doctype html><meta charset="utf-8"><title>Blob video</titl
                    " history.pushState({}, '', '/watch?v=spa123'); });</script>")
 
 
+# A news page embedding another site's player, whose own page title only names the player.
+EMBED_TOP_PAGE = ('<!doctype html><meta charset="utf-8"><title>Real article title</title><h1>Article</h1>'
+                  '<iframe src="/embedplayer" width="680" height="400" allow="autoplay" style="border:0"></iframe>')
+EMBED_PLAYER_PAGE = ('<!doctype html><meta charset="utf-8"><title>Example Video Player</title><body style="margin:0">'
+                     '<video src="/media/sample.mp4" width="640" height="360" autoplay muted loop playsinline></video>')
+
+
 def shadow_player_page(mode: str) -> str:
     """A player that keeps its <video> in a shadow root under a controls overlay, like Reddit's
     <shreddit-player>: the video's "playing" event never reaches the document."""
     return ('<!doctype html><meta charset="utf-8"><title>Shadow player</title><h1>Shadow player</h1>'
-            f'<{mode}-player id="p" style="display:block;width:640px;height:360px"></{mode}-player><script>'
+            '<div post-title="Shadow test clip">'  # Like Reddit's post around its player: names the file.
+            f'<{mode}-player id="p" style="display:block;width:640px;height:360px"></{mode}-player></div><script>'
             f"customElements.define('{mode}-player', class extends HTMLElement {{ constructor() {{ super();"
             f" this.attachShadow({{mode: '{mode}'}}).innerHTML = '<div style=\"position:relative;width:640px;height:360px\">"
             '<video src="/media/sample.mp4" width="640" height="360" autoplay muted loop playsinline></video>'
@@ -118,6 +126,10 @@ class Fixtures(BaseHTTPRequestHandler):
             self.send(200, VIDEO_PAGE.encode(), "text/html; charset=utf-8")
         elif path == "/blobvideo":
             self.send(200, BLOB_VIDEO_PAGE.encode(), "text/html; charset=utf-8")
+        elif path == "/embedtop":
+            self.send(200, EMBED_TOP_PAGE.encode(), "text/html; charset=utf-8")
+        elif path == "/embedplayer":
+            self.send(200, EMBED_PLAYER_PAGE.encode(), "text/html; charset=utf-8")
         elif m := re.fullmatch(r"/(open|closed)player", path):
             self.send(200, shadow_player_page(m.group(1)).encode(), "text/html; charset=utf-8")
         elif path == "/media/sample.mp4":
@@ -346,10 +358,29 @@ def functional(folder: Path, base: str) -> dict:
                         browser.call("Input.dispatchMouseEvent", {"type": kind, **button, "button": "left", "clickCount": 1}, shadow)
                     offer = next_offer(bridge, 15)
                     assert offer and offer["url"].endswith("/media/sample.mp4"), offer
+                    assert offer["filename"] == "Shadow test clip.mp4", f"named {offer['filename']!r}, not after the video"
                     bridge.done(offer["id"])
                     result["sent"] = "sample.mp4"
+                    result["saved_as"] = offer["filename"]
                 report["shadow_players"][mode] = result
                 browser.call("Target.closeTarget", {"targetId": shadow_target})
+
+            # 4d. An embedded player whose page title only names the player ("... Video Player"):
+            # the file is named after the page around it, as in IDM.
+            embed_target, embed = browser.open_page(f"{base}/embedtop")
+            frame_button = """(() => { const f = document.querySelector('iframe'); const d = f && f.contentDocument;
+                const host = d && d.querySelector('dot-video-button');
+                if (!host || d.defaultView.getComputedStyle(host).display === 'none') return null;
+                const fr = f.getBoundingClientRect(), r = host.getBoundingClientRect();
+                return r.width > 20 ? {x: fr.left + r.left + 40, y: fr.top + r.top + r.height / 2} : null; })()"""
+            box = wait_for(lambda: browser.evaluate(embed, frame_button), "embedded player button", 20, 0.2)
+            for kind in ("mousePressed", "mouseReleased"):
+                browser.call("Input.dispatchMouseEvent", {"type": kind, **box, "button": "left", "clickCount": 1}, embed)
+            offer = next_offer(bridge, 15)
+            assert offer and offer["filename"] == "Real article title.mp4", f"named {offer and offer['filename']!r}"
+            bridge.done(offer["id"])
+            report["embedded_player"] = {"player_page_title": "Example Video Player", "saved_as": offer["filename"]}
+            browser.call("Target.closeTarget", {"targetId": embed_target})
             report["first_session_job"] = browser.job_snapshot()
 
         # 5. Restart with download history in the profile: nothing is sent at start-up.

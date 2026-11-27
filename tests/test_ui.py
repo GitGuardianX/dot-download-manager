@@ -174,6 +174,22 @@ class UiTest(unittest.TestCase):
         self.assertFalse(output.exists(), "the ticked option deleted the finished file")
         self.assertIn("0 downloads in your library", self.app.footer.cget("text"))
 
+    def test_a_rendition_picked_in_the_page_shows_its_quality(self):
+        info = {"title": "manifest", "duration": 232, "site": "Generic", "warning": "",
+                "choices": sites.choices({"formats": [{"format_id": "0", "ext": "mp4", "protocol": "m3u8_native"}]})}
+        offer = {"id": "c" * 32, "url": "https://vod.example/h264_aac_fhd/1/manifest.m3u8", "referer": "", "headers": {},
+                 "filename": "manifest.mp4", "total": None, "mime": "", "stream": True, "site": False, "source": "media",
+                 "warning": "", "title": "Real article title", "quality": "1080p", "probed": True}
+        with patch.object(sites, "describe", return_value=info):
+            dialog = VideoConfirmation(self.app, offer)
+            until = time.monotonic() + 5
+            while dialog.info is None and time.monotonic() < until:
+                self.app.update()
+                time.sleep(0.05)
+        self.assertEqual(dialog.quality.get(), "1080p", "not 'Best available'")
+        self.assertIn("Real article title", dialog.title_label.cget("text"))
+        dialog.destroy()
+
     def test_close_button_exits_when_the_tray_is_off(self):
         self.app.tray = FakeTray()
         self.app.manager.configure(keep_in_tray=False)

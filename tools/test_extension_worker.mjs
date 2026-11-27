@@ -39,7 +39,7 @@ function world({dot = "up", probeMs = 300, accept = true} = {}) {
     stats.fetch.push({path, at: now});
     assert.equal(new URL(url).hostname, "127.0.0.1", "only loopback may be contacted");
     assert.equal(init.method, "POST");
-    assert.equal(init.headers["X-DOT-Client"], "dot-extension/0.4.3", "the extension reports its version");
+    assert.equal(init.headers["X-DOT-Client"], "dot-extension/0.4.7", "the extension reports its version");
     if (dot === "down") throw new TypeError("Failed to fetch");
     if (dot === "hang") return delay(10 ** 9, init.signal);
     if (path === "/v1/hello") return reply(200, {app: "DOT"});
@@ -56,7 +56,7 @@ function world({dot = "up", probeMs = 300, accept = true} = {}) {
   const forbidden = name => () => { throw new Error(`${name} must never be used`); };
   const chrome = {
     runtime: {id: "dot-test", onInstalled: event("onInstalled"), onMessage: event("onMessage"),
-              getManifest: () => ({version: "0.4.3"}),
+              getManifest: () => ({version: "0.4.7"}),
               sendNativeMessage: forbidden("sendNativeMessage"), connectNative: forbidden("connectNative")},
     storage: {
       local: {get: async defaults => ({...defaults, ...local}), set: async value => { stats.localWrites++; Object.assign(local, value); }},
@@ -279,6 +279,62 @@ await check("streams carry the player's referrer, origin and the tab title; vari
   body = w2.stats.handoffBodies.at(-1);
   assert.equal(body.source, "page");
   assert.equal(body.origin, undefined);
+});
+
+await check("IDM-style labels, best first, only the clicked video's files, named after the video", async () => {
+  const w = world();
+  const file = (url, mime, bytes) => w.listeners["webRequest.onHeadersReceived"].forEach(fn => fn({tabId: 7, frameId: 0,
+    type: "media", url, initiator: "https://video.example", statusCode: 200,
+    responseHeaders: [{name: "Content-Type", value: mime}, {name: "Content-Length", value: String(bytes)}]}));
+  const MiB = 1048576;
+  // Two Reddit-style videos on one page: their files share each video's ID in the address.
+  file("https://media.example/aaaa1111bb/pb/m2-res_478p.mp4?m=DASHPlaylist.mpd", "video/mp4", 2.3 * MiB);
+  await w.advance(10);
+  file("https://media.example/cccc2222dd/pb/m2-res_478p.mp4?m=DASHPlaylist.mpd", "video/mp4", 2.3 * MiB);
+  await w.advance(10);
+  file("https://media.example/cccc2222dd/pb/m2-res_1920p.mp4?m=DASHPlaylist.mpd", "video/mp4", 12.3 * MiB);
+  await w.advance(10);
+  file("https://media.example/cccc2222dd/CMAF_96.mp4", "video/mp4", 0.1 * MiB);
+  await w.advance(10);
+  file("https://media.example/cccc2222dd/CMAF_AUDIO_128.mp4", "audio/mp4", 0.5 * MiB);
+  await w.advance(10);
+  w.media("https://media.example/cccc2222dd/HLSPlaylist.m3u8", "application/vnd.apple.mpegurl");
+  await w.advance(10);
+  const reply = await w.message({type: "video", src: "blob:https://video.example/x", title: "A post title",
+                                 hints: ["https://media.example/cccc2222dd/HLSPlaylist.m3u8"]});
+  assert.equal(reply.choices.map(c => c.label).join(" | "),
+    "1920p HD · MP4 · 12.3 MiB | 478p · MP4 · 2.3 MiB | 96p · MP4 · 0.1 MiB | " +
+    "HLS stream · pick quality in DOT | Audio only · MP4 · 0.5 MiB | This page's video · via yt-dlp (any quality)");
+  assert.ok(reply.choices.every(c => c.kind === "page" || c.url.includes("/cccc2222dd/")), "the other video's file is not offered");
+  const pick = reply.choices[1];
+  const sending = w.message({type: "send", url: pick.url, kind: pick.kind, mime: "video/mp4", title: "A post title", quality: pick.quality});
+  await w.advance(1000);
+  assert.equal((await sending).ok, true);
+  const body = w.stats.handoffBodies.at(-1);
+  assert.equal(body.title, "A post title", "the video's own title, not the tab's");
+  assert.equal(body.quality, "478p");
+  // Without hints that match, every file is offered, as before.
+  const all = await w.message({type: "video", src: "blob:https://video.example/x", hints: ["https://other.example/zz/v.m3u8"]});
+  assert.ok(all.choices.some(c => c.url.includes("/aaaa1111bb/")));
+});
+
+await check("stream labels name the quality: Dailymotion renditions and quality folders", async () => {
+  const w = world();
+  for (const url of ["https://cdndirector.example/cdn/manifest/video/x8k2abc.m3u8?sec=abc",
+                     "https://vod.example/sec(x)/video/fmp4/7258/h264_aac_hd/1/manifest.m3u8",
+                     "https://vod.example/sec(x)/video/fmp4/7258/h264_aac_fhd/1/manifest.m3u8"]) {
+    w.media(url, "application/vnd.apple.mpegurl");
+    await w.advance(10);
+  }
+  let reply = await w.message({type: "video", src: "blob:https://video.example/x"});
+  assert.equal(reply.choices.map(c => c.label).join(" | "),
+    "HLS stream · pick quality in DOT | 1080p HD · HLS stream | 720p HD · HLS stream | This page's video · via yt-dlp (any quality)");
+  assert.equal(reply.choices[1].quality, "1080p");
+  const w2 = world();
+  w2.media("https://cdn.example/hls/videos/2025/1080P_4000K_17679435.mp4/master.m3u8", "application/vnd.apple.mpegurl");
+  await w2.advance(10);
+  reply = await w2.message({type: "video", src: "blob:https://video.example/x"});
+  assert.equal(reply.choices[0].label, "1080p HD · HLS stream");
 });
 
 await check("empty placeholder playlists are not offered", async () => {

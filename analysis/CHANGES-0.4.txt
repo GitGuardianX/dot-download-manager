@@ -149,3 +149,40 @@ Fixes
 Validation: local servers mimicking real-debrid (mislabelled probe, no version; parallel,
 pause and resume inside pieces); the reported link accepted by DOT's browser check
 (2.68 GiB) and downloaded with 8 connections over 32 pieces, resuming after a pause.
+
+DOT 0.4.6: VIDEO BUTTON NAMES
+
+Report: the "Download with DOT" menu showed address names ("CMAF_96.mp4", "m2-res_478p.mp4"),
+the same list on every video of a page, and files were saved under those names.
+
+Changes
+  - IDM-style menu entries, best first: "1920p HD · MP4 · 12.3 MiB", then streams ("choose
+    the quality in DOT"), then "Audio only", then the yt-dlp page option.
+  - Only the clicked video's files: the button reads the addresses its player names (src
+    attributes, crossing shadow roots) and the menu keeps the files sharing their ID.
+  - Files are named after the video: a title on the player or its post (Reddit's post-title),
+    an embedded player page's title, else the tab's; plus the quality: "Post title (478p).mp4".
+    Ordinary browser downloads keep the server's name.
+  - Fixed: an address whose query ends in ".mpd" (Reddit MP4s, "?m=DASHPlaylist.mpd") was taken
+    for a stream; only the path decides now, in the extension and in DOT.
+
+Validation: extension worker tests for labels, ordering, per-video filtering and titles; bridge
+naming; capped Brave: a shadow-root player inside a post is saved as "Shadow test clip.mp4".
+
+DOT 0.4.7: NAMES FOR EMBEDDED PLAYERS AND STREAM RENDITIONS
+
+Report: a Dailymotion player embedded in a news page was named "Dailymotion Video Player"
+(dialog title and file name), and the menu showed raw, cut-off stream names
+("Video stream (HLS) · h264_aac_fhd · choose the quality i...").
+
+Changes
+  - Titles that only name a player ("... Video Player", "JW Player") are ignored; the
+    surrounding page's title names the file, as in IDM.
+  - Short stream labels: "HLS stream · pick quality in DOT" (usually the master playlist),
+    then one per rendition: "1080p HD · HLS stream". Qualities are read from folder names
+    such as "1080P_4000K" and Dailymotion's renditions (ld 240p, sd 380p, hq 480p, hd 720p,
+    fhd 1080p, qhd 1440p, uhd 2160p).
+  - A rendition picked in the menu shows its quality in DOT's window instead of "Best available".
+
+Validation: extension worker tests for the Dailymotion stream set; capped Brave: a player
+page titled "Example Video Player" inside an article saves as "Real article title.mp4".

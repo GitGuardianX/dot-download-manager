@@ -30,9 +30,11 @@ const CAPTURE_TYPES = new Set(("3gp 7z aac ace aif aiff apk arj asf avi bin bz2 
 const CAPTURE_MIME = /^(video|audio)\/|^application\/(zip|x-zip-compressed|x-7z-compressed|x-rar-compressed|vnd\.rar|x-tar|gzip|x-gzip|x-bzip2|x-xz|zstd|pdf|octet-stream|x-msdownload|x-msi|vnd\.android\.package-archive|x-iso9660-image|x-apple-diskimage)$/i;
 // Kept in the browser even when served as generic binary: small, browser-friendly files.
 const BROWSER_TYPES = new Set("txt csv tsv json xml html htm ics vcf png jpg jpeg gif webp svg avif css js md log".split(" "));
-const MANIFEST_URL = /\.(m3u8|mpd)(?:$|[?#])/i;
+// Matched against the address's path only: Reddit's MP4 files carry "?m=DASHPlaylist.mpd".
+const MANIFEST_PATH = /\.(m3u8|mpd)$/i;
 const MANIFEST_MIME = /mpegurl|dash\+xml/i;
-const SEGMENT_URL = /\.(ts|m4s|aac|vtt|webvtt|key)(?:$|[?#])/i;
+const SEGMENT_PATH = /\.(ts|m4s|aac|vtt|webvtt|key)$/i;
+const pathOf = url => { try { return new URL(url).pathname; } catch { return ""; } };
 
 const httpUrl = url => typeof url === "string" && url.length <= 8192 && /^https?:\/\//i.test(url);
 const basename = path => String(path || "").split(/[\\/]/).pop().slice(0, 255);
@@ -268,10 +270,80 @@ function distinct(items) {
   });
 }
 
+// Media that belongs to the clicked video: items sharing a distinctive part of their address
+// (an ID such as Reddit's "a1b2c3d4e5f6g") with the addresses its player names. When nothing
+// matches, every item is offered, as before.
+function forVideo(items, hints) {
+  const ids = new Set();
+  for (const hint of Array.isArray(hints) ? hints.slice(0, 8) : []) {
+    try {
+      for (const part of new URL(hint).pathname.split("/")) {
+        if (part.length >= 6 && /\d/.test(part) && !/\.\w{2,4}$/.test(part)) ids.add(part);
+      }
+    } catch { }
+  }
+  if (!ids.size) return items;
+  const own = items.filter(item => { try { return new URL(item.url).pathname.split("/").some(part => ids.has(part)); } catch { return false; } });
+  return own.length ? own : items;
+}
+
+const PAGE_LABEL = "This page's video · via yt-dlp (any quality)";
+const fileName = url => { try { return decodeURIComponent(new URL(url).pathname.split("/").pop()); } catch { return ""; } };
+
+// The telling part of a stream's address, so two streams are told apart: "h264_aac_hq" in
+// .../h264_aac_hq/1/manifest.m3u8. Generic playlist names and plain numbers are skipped.
+function streamName(url) {
+  let parts = [];
+  try { parts = new URL(url).pathname.split("/").map(part => decodeURIComponent(part)); } catch { return ""; }
+  const generic = /^(master|manifest|index|playlist|hlsplaylist|dashplaylist|prog_index|chunklist|media|stream)\b[^/]*\.(m3u8|mpd)$/i;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (!part || /^\d+$/.test(part) || (i === parts.length - 1 && generic.test(part))) continue;
+    return part.slice(0, 40);
+  }
+  return "";
+}
+
+// Quality named in an address part: "m2-res_1920p", "1080P_4000K", "DASH_720", "CMAF_96", or a
+// Dailymotion-style rendition ("h264_aac_fhd" is 1080p).
+const RENDITIONS = {ld: 240, sd: 380, hq: 480, hd: 720, fhd: 1080, qhd: 1440, uhd: 2160};
+function heightIn(text) {
+  const match = /(?:^|[^a-z0-9])(\d{3,4})p(?![a-z])/i.exec(text) || /(?:DASH|CMAF)_(\d{2,4})(?!\d)/i.exec(text);
+  if (match) return Number(match[1]);
+  const rendition = /(?:^|[_-])(ld|sd|hq|hd|fhd|qhd|uhd)$/i.exec(text);
+  return rendition ? RENDITIONS[rendition[1].toLowerCase()] : 0;
+}
+
+// IDM-style menu entries, short and best first: "1920p HD · MP4 · 12.3 MiB"; a stream whose
+// qualities DOT lists ("HLS stream · pick quality in DOT", usually the master playlist), then
+// one rendition each ("1080p HD · HLS stream"); then audio. The quality also names the file.
+function labelled(items) {
+  const hd = height => `${height}p${height >= 720 ? " HD" : ""}`;
+  return items.map(item => {
+    const name = fileName(item.url);
+    const size = item.size ? ` · ${(item.size / 1048576).toFixed(1)} MiB` : "";
+    const ext = ((/\.(\w{2,4})$/.exec(name) || [])[1] || (item.mime || "").split("/")[1] || "").toUpperCase().slice(0, 5);
+    if (item.kind === "stream") {
+      const type = /\.mpd$/i.test(name) ? "DASH" : "HLS";
+      const height = heightIn(streamName(item.url)) || heightIn(name.replace(/\.\w+$/, ""));
+      return height ? {...item, rank: 2, height, quality: `${height}p`, label: `${hd(height)} · ${type} stream`}
+                    : {...item, rank: 1, height: 0, quality: "", label: `${type} stream · pick quality in DOT`};
+    }
+    if (item.kind === "audio" || /audio/i.test(name)) {
+      return {...item, rank: 3, height: 0, quality: "audio", label: `Audio only${ext ? ` · ${ext}` : ""}${size}`};
+    }
+    const height = heightIn(name);
+    const label = height ? `${hd(height)}${ext ? ` · ${ext}` : ""}${size}`
+                         : `Video${ext ? ` · ${ext}` : ""}${size} · ${name.slice(0, 30) || "media"}`;
+    return {...item, rank: 0, height, quality: height ? `${height}p` : "", label};
+  }).sort((a, b) => a.rank - b.rank || b.height - a.height);
+}
+
 // Replay the request the page's player made: stream hosts often accept only requests with the
-// player's site as referrer and, from another site, an Origin header. The tab title names the file.
-async function playerContext(tab, url) {
-  const context = {title: String(tab?.title || "").slice(0, 200)};
+// player's site as referrer and, from another site, an Origin header. The video's own title
+// (from the page), else the tab's, names the file.
+async function playerContext(tab, url, title) {
+  const context = {title: String(title || tab?.title || "").replace(/\s+/g, " ").trim().slice(0, 200)};
   if (!tab) return context;
   const known = (await currentMedia(tab.id, tab.url)).find(item => item.key === pageKey(url));
   const initiator = /^https?:\/\/[^/]+$/.test(known?.initiator || "") ? known.initiator : "";
@@ -288,7 +360,7 @@ async function currentMedia(tabId, tabUrl) {
 
 chrome.webRequest.onHeadersReceived.addListener(details => {
   if (details.tabId < 0 || (details.statusCode !== 200 && details.statusCode !== 206)) return;
-  if (details.url.length > 8192 || SEGMENT_URL.test(details.url)) return;
+  if (details.url.length > 8192 || SEGMENT_PATH.test(pathOf(details.url))) return;
   let mime = "", length = "", range = "";
   for (const header of details.responseHeaders || []) {
     const name = header.name.toLowerCase();
@@ -297,7 +369,7 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
     else if (name === "content-range") range = header.value || "";
   }
   let kind = "";
-  if (MANIFEST_MIME.test(mime) || MANIFEST_URL.test(details.url)) kind = "stream";
+  if (MANIFEST_MIME.test(mime) || MANIFEST_PATH.test(pathOf(details.url))) kind = "stream";
   else if (details.type === "media" && /^(video|audio)\//.test(mime) && mime !== "video/mp2t") kind = mime.startsWith("audio/") ? "audio" : "video";
   if (!kind) return;
   if (kind === "stream" && length.trim() === "0") return;  // An empty placeholder playlist: nothing to download.
@@ -346,26 +418,26 @@ async function respond(message, sender) {
     case "send": {
       const kind = String(message.kind || "");
       const offer = {source: kind === "page" ? "page" : kind ? "media" : "link", url: message.url, kind,
-                     mime: String(message.mime || ""), referrer};
-      return sendExplicit(kind && kind !== "page" ? {...offer, ...await playerContext(tab, message.url)} : offer);
+                     mime: String(message.mime || ""), referrer, quality: String(message.quality || "").slice(0, 20)};
+      return sendExplicit(kind && kind !== "page" ? {...offer, ...await playerContext(tab, message.url, message.title)} : offer);
     }
     case "video": {
       if (!tab) return {ok: false, error: "This request did not come from a tab."};
       if (httpUrl(message.src)) {
-        return sendExplicit({source: "media", url: message.src, referrer, ...await playerContext(tab, message.src)});
+        return sendExplicit({source: "media", url: message.src, referrer, ...await playerContext(tab, message.src, message.title)});
       }
       // The page (or the embedded player's frame) can be read by yt-dlp in DOT: YouTube and
       // many other sites never expose a plain video address to the browser.
       const page = currentPage(message.page, sender, tab);
       const items = await currentMedia(tab.id, tab.url);
       const sameFrame = items.filter(item => item.frameId === sender.frameId);
-      const choices = distinct(sameFrame.length ? sameFrame : items).slice(0, 7)
-        .map(({url, kind, mime, size}) => ({url, kind, mime, size}));
+      const choices = labelled(distinct(forVideo(sameFrame.length ? sameFrame : items, message.hints))).slice(0, 7)
+        .map(({url, kind, mime, size, label, quality}) => ({url, kind, mime, size, label, quality}));
       if (!choices.length) {
         return page ? sendExplicit({source: "page", url: page, kind: "page", referrer})
                     : {ok: false, error: "This player hasn't exposed a downloadable video."};
       }
-      if (page) choices.push({url: page, kind: "page", mime: "", size: null});
+      if (page) choices.push({url: page, kind: "page", mime: "", size: null, label: PAGE_LABEL, quality: ""});
       return {ok: true, choices};
     }
   }
